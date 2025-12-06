@@ -7,7 +7,7 @@ import typer
 from rich.console import Console
 from sqlglot.errors import ParseError
 
-from sqlglider.lineage.analyzer import LineageAnalyzer
+from sqlglider.lineage.analyzer import LineageAnalyzer, QueryLineage, QueryTableLineage
 from sqlglider.lineage.formatters import (
     CsvFormatter,
     JsonFormatter,
@@ -64,6 +64,12 @@ def lineage(
         "--source-column",
         "-s",
         help="Source column for reverse lineage (impact analysis)",
+    ),
+    table_filter: Optional[str] = typer.Option(
+        None,
+        "--table",
+        "-t",
+        help="Filter to only queries that reference this table (for multi-query files)",
     ),
     output_format: str = typer.Option(
         "text",
@@ -131,35 +137,80 @@ def lineage(
         # Create analyzer
         analyzer = LineageAnalyzer(sql, dialect=dialect)
 
+        # Check if we have multiple queries
+        has_multiple_queries = len(analyzer.expressions) > 1
+
         # Analyze based on level
         if level == "column":
             # Column-level lineage
             if source_column:
                 # Reverse lineage (impact analysis)
-                results = analyzer.analyze_reverse_lineage(source_column)
+                if has_multiple_queries:
+                    # Multi-query reverse lineage
+                    query_results = analyzer.analyze_all_queries_reverse(source_column, table_filter)
+                    # Format as multi-query results
+                    if output_format == "text":
+                        formatted = TextFormatter.format_multi_query(query_results)
+                    elif output_format == "json":
+                        formatted = JsonFormatter.format_multi_query(query_results)
+                    else:  # csv
+                        formatted = CsvFormatter.format_multi_query(query_results)
+                else:
+                    # Single-query reverse lineage
+                    results = analyzer.analyze_reverse_lineage(source_column)
+                    # Format as single-query results
+                    if output_format == "text":
+                        formatted = TextFormatter.format(results)
+                    elif output_format == "json":
+                        formatted = JsonFormatter.format(results)
+                    else:  # csv
+                        formatted = CsvFormatter.format(results)
             else:
                 # Forward lineage (source tracing)
-                results = analyzer.analyze_column_lineage(column)
-
-            # Format output
-            if output_format == "text":
-                formatted = TextFormatter.format(results)
-            elif output_format == "json":
-                formatted = JsonFormatter.format(results)
-            else:  # csv
-                formatted = CsvFormatter.format(results)
+                if has_multiple_queries:
+                    # Multi-query mode
+                    query_results = analyzer.analyze_all_queries(column, table_filter)
+                    # Format as multi-query results
+                    if output_format == "text":
+                        formatted = TextFormatter.format_multi_query(query_results)
+                    elif output_format == "json":
+                        formatted = JsonFormatter.format_multi_query(query_results)
+                    else:  # csv
+                        formatted = CsvFormatter.format_multi_query(query_results)
+                else:
+                    # Single-query mode (backward compatibility)
+                    results = analyzer.analyze_column_lineage(column)
+                    # Format as single-query results
+                    if output_format == "text":
+                        formatted = TextFormatter.format(results)
+                    elif output_format == "json":
+                        formatted = JsonFormatter.format(results)
+                    else:  # csv
+                        formatted = CsvFormatter.format(results)
 
         else:  # table
             # Table-level lineage
-            result = analyzer.analyze_table_lineage()
+            if has_multiple_queries:
+                # Multi-query table lineage
+                query_results = analyzer.analyze_all_queries_table_lineage(table_filter)
+                # Format as multi-query table results
+                if output_format == "text":
+                    formatted = TextFormatter.format_multi_query_table(query_results)
+                elif output_format == "json":
+                    formatted = JsonFormatter.format_multi_query_table(query_results)
+                else:  # csv
+                    formatted = CsvFormatter.format_multi_query_table(query_results)
+            else:
+                # Single-query table lineage
+                result = analyzer.analyze_table_lineage()
 
-            # Format output
-            if output_format == "text":
-                formatted = TextFormatter.format_table(result)
-            elif output_format == "json":
-                formatted = JsonFormatter.format_table(result)
-            else:  # csv
-                formatted = CsvFormatter.format_table(result)
+                # Format output
+                if output_format == "text":
+                    formatted = TextFormatter.format_table(result)
+                elif output_format == "json":
+                    formatted = JsonFormatter.format_table(result)
+                else:  # csv
+                    formatted = CsvFormatter.format_table(result)
 
         # Write output
         OutputWriter.write(formatted, output_file)

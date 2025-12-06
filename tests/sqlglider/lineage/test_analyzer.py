@@ -875,3 +875,286 @@ class TestAnalyzerEdgeCases:
         results = analyzer.analyze_column_lineage()
 
         assert len(results) >= 1
+
+
+class TestMultiQueryParsing:
+    """Test parsing and analyzing multiple queries in a single file."""
+
+    @pytest.fixture
+    def multi_query_sql(self):
+        """SQL file with multiple queries."""
+        return """
+        SELECT customer_id, customer_name
+        FROM customers;
+
+        SELECT order_id, customer_id, order_total
+        FROM orders;
+
+        INSERT INTO customer_orders
+        SELECT
+            c.customer_id,
+            c.customer_name,
+            o.order_id,
+            o.order_total
+        FROM customers c
+        JOIN orders o ON c.customer_id = o.customer_id;
+        """
+
+    @pytest.fixture
+    def single_query_sql(self):
+        """SQL file with a single query for backward compatibility testing."""
+        return """
+        SELECT customer_id, customer_name
+        FROM customers
+        """
+
+    def test_parse_multiple_statements(self, multi_query_sql):
+        """Test that multiple statements are parsed correctly."""
+        analyzer = LineageAnalyzer(multi_query_sql, dialect="spark")
+
+        assert len(analyzer.expressions) == 3
+        assert analyzer.expr is not None  # First expression stored for backward compatibility
+
+    def test_parse_single_statement(self, single_query_sql):
+        """Test backward compatibility with single statement."""
+        analyzer = LineageAnalyzer(single_query_sql, dialect="spark")
+
+        assert len(analyzer.expressions) == 1
+        assert analyzer.expr is not None
+
+    def test_analyze_all_queries(self, multi_query_sql):
+        """Test analyzing all queries returns results for each query."""
+        analyzer = LineageAnalyzer(multi_query_sql, dialect="spark")
+        results = analyzer.analyze_all_queries()
+
+        assert len(results) == 3
+        from sqlglider.lineage.analyzer import QueryLineage
+        assert all(isinstance(r, QueryLineage) for r in results)
+
+        # Check query indices
+        assert results[0].query_index == 0
+        assert results[1].query_index == 1
+        assert results[2].query_index == 2
+
+        # Check query previews exist
+        assert "SELECT" in results[0].query_preview
+        assert "SELECT" in results[1].query_preview
+        assert "INSERT" in results[2].query_preview
+
+        # Check that each has column lineage
+        assert len(results[0].column_lineage) > 0
+        assert len(results[1].column_lineage) > 0
+        assert len(results[2].column_lineage) > 0
+
+    def test_analyze_all_queries_specific_column(self, multi_query_sql):
+        """Test analyzing specific column across all queries."""
+        analyzer = LineageAnalyzer(multi_query_sql, dialect="spark")
+        results = analyzer.analyze_all_queries(column="customers.customer_id")
+
+        # Should get only queries that have this specific column
+        # Query 0: customers.customer_id exists
+        # Query 1: orders.customer_id (different qualified name)
+        # Query 2: customer_orders.customer_id (different qualified name)
+        # So we should get 1 result
+        assert len(results) == 1
+        assert results[0].query_index == 0
+
+        # Should only have customer_id lineage
+        assert len(results[0].column_lineage) == 1
+        assert "customers.customer_id" in results[0].column_lineage[0].output_column
+
+    def test_backward_compatibility_single_query(self, single_query_sql):
+        """Test that single query still works with old analyze_column_lineage method."""
+        analyzer = LineageAnalyzer(single_query_sql, dialect="spark")
+        results = analyzer.analyze_column_lineage()
+
+        assert len(results) == 2  # customer_id, customer_name
+        assert any("customer_id" in r.output_column for r in results)
+        assert any("customer_name" in r.output_column for r in results)
+
+
+class TestTableFiltering:
+    """Test filtering queries by table name."""
+
+    @pytest.fixture
+    def multi_query_different_tables(self):
+        """SQL file with queries using different tables."""
+        return """
+        SELECT product_id, product_name
+        FROM products;
+
+        SELECT customer_id, customer_name
+        FROM customers;
+
+        SELECT order_id, product_id, customer_id
+        FROM orders;
+        """
+
+    def test_filter_by_table(self, multi_query_different_tables):
+        """Test filtering to only queries that use a specific table."""
+        analyzer = LineageAnalyzer(multi_query_different_tables, dialect="spark")
+        results = analyzer.analyze_all_queries(table_filter="customers")
+
+        # Should only get the query that references customers table
+        assert len(results) == 1
+        assert results[0].query_index == 1
+        assert "customer" in results[0].query_preview.lower()
+
+    def test_filter_by_table_multiple_matches(self, multi_query_different_tables):
+        """Test filtering when multiple queries reference the table."""
+        analyzer = LineageAnalyzer(multi_query_different_tables, dialect="spark")
+        results = analyzer.analyze_all_queries(table_filter="orders")
+
+        # Should only get the query that references orders table
+        assert len(results) == 1
+        assert results[0].query_index == 2
+
+    def test_filter_by_table_case_insensitive(self, multi_query_different_tables):
+        """Test that table filtering is case-insensitive."""
+        analyzer = LineageAnalyzer(multi_query_different_tables, dialect="spark")
+        results_lower = analyzer.analyze_all_queries(table_filter="products")
+        results_upper = analyzer.analyze_all_queries(table_filter="PRODUCTS")
+        results_mixed = analyzer.analyze_all_queries(table_filter="PrOdUcTs")
+
+        assert len(results_lower) == len(results_upper) == len(results_mixed) == 1
+        assert results_lower[0].query_index == results_upper[0].query_index == results_mixed[0].query_index == 0
+
+    def test_filter_no_matches(self, multi_query_different_tables):
+        """Test filtering with table that doesn't exist."""
+        analyzer = LineageAnalyzer(multi_query_different_tables, dialect="spark")
+        results = analyzer.analyze_all_queries(table_filter="nonexistent_table")
+
+        assert len(results) == 0
+
+    def test_filter_partial_match(self, multi_query_different_tables):
+        """Test filtering with partial table name."""
+        analyzer = LineageAnalyzer(multi_query_different_tables, dialect="spark")
+        results = analyzer.analyze_all_queries(table_filter="cust")
+
+        # Should match "customers" table
+        assert len(results) == 1
+        assert results[0].query_index == 1
+
+
+class TestMultiQueryEdgeCases:
+    """Test edge cases for multi-query support."""
+
+    def test_sql_with_comments_and_queries(self):
+        """Test that comments are ignored and queries are parsed."""
+        sql = """
+        -- This is a comment
+        SELECT * FROM table1;
+        -- Another comment
+        SELECT * FROM table2;
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        assert len(analyzer.expressions) == 2
+
+    def test_semicolon_separated_queries(self):
+        """Test that semicolon-separated queries are parsed correctly."""
+        sql = "SELECT * FROM table1; SELECT * FROM table2; SELECT * FROM table3;"
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        assert len(analyzer.expressions) == 3
+
+
+class TestMultiQueryReverseLineage:
+    """Test reverse lineage for multi-query files."""
+
+    @pytest.fixture
+    def multi_query_sql(self):
+        """SQL with multiple queries using customer_id."""
+        return """
+        SELECT customer_id, customer_name FROM customers;
+        SELECT order_id, customer_id FROM orders;
+        SELECT customer_id, product_id FROM order_items;
+        """
+
+    def test_reverse_lineage_all_queries(self, multi_query_sql):
+        """Test reverse lineage across all queries."""
+        analyzer = LineageAnalyzer(multi_query_sql, dialect="spark")
+        results = analyzer.analyze_all_queries_reverse("customers.customer_id")
+
+        # Should get results from all 3 queries
+        assert len(results) == 3
+        from sqlglider.lineage.analyzer import QueryLineage
+        assert all(isinstance(r, QueryLineage) for r in results)
+
+    def test_reverse_lineage_with_table_filter(self, multi_query_sql):
+        """Test reverse lineage with table filter."""
+        analyzer = LineageAnalyzer(multi_query_sql, dialect="spark")
+        results = analyzer.analyze_all_queries_reverse("customers.customer_id", table_filter="orders")
+
+        # Should only get queries referencing orders table
+        assert len(results) == 1
+        assert results[0].query_index == 1
+
+    def test_reverse_lineage_nonexistent_column(self, multi_query_sql):
+        """Test reverse lineage with column that doesn't exist."""
+        analyzer = LineageAnalyzer(multi_query_sql, dialect="spark")
+        results = analyzer.analyze_all_queries_reverse("nonexistent.column")
+
+        # Should get empty results
+        assert len(results) == 0
+
+    def test_reverse_lineage_base_table_column(self):
+        """Test reverse lineage with base table columns (not derived)."""
+        sql = """
+        SELECT order_id, order_total FROM orders;
+        SELECT customer_id FROM customers;
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_all_queries_reverse("orders.order_total")
+
+        # Should find the column in query 0
+        assert len(results) == 1
+        assert results[0].query_index == 0
+        # Base table columns show themselves as affected outputs
+        assert "orders.order_total" in results[0].column_lineage[0].source_columns
+
+    def test_reverse_lineage_single_query_base_column(self):
+        """Test single-query reverse lineage with base table column."""
+        sql = "SELECT order_id, order_total, customer_id FROM orders"
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        result = analyzer.analyze_reverse_lineage("orders.order_total")
+
+        assert len(result) == 1
+        assert result[0].output_column == "orders.order_total"
+        assert "orders.order_total" in result[0].source_columns
+
+
+class TestMultiQueryTableLineage:
+    """Test table-level lineage for multi-query files."""
+
+    @pytest.fixture
+    def multi_query_sql(self):
+        """SQL with multiple queries using different tables."""
+        return """
+        SELECT * FROM customers;
+        SELECT * FROM orders JOIN products ON orders.product_id = products.id;
+        SELECT * FROM inventory;
+        """
+
+    def test_table_lineage_all_queries(self, multi_query_sql):
+        """Test table lineage across all queries."""
+        analyzer = LineageAnalyzer(multi_query_sql, dialect="spark")
+        results = analyzer.analyze_all_queries_table_lineage()
+
+        # Should get results from all 3 queries
+        assert len(results) == 3
+        from sqlglider.lineage.analyzer import QueryTableLineage
+        assert all(isinstance(r, QueryTableLineage) for r in results)
+
+        # Check that tables are correctly identified
+        assert "customers" in results[0].table_lineage.source_tables
+        assert "orders" in results[1].table_lineage.source_tables
+        assert "products" in results[1].table_lineage.source_tables
+        assert "inventory" in results[2].table_lineage.source_tables
+
+    def test_table_lineage_with_filter(self, multi_query_sql):
+        """Test table lineage with table filter."""
+        analyzer = LineageAnalyzer(multi_query_sql, dialect="spark")
+        results = analyzer.analyze_all_queries_table_lineage(table_filter="products")
+
+        # Should only get query with products table
+        assert len(results) == 1
+        assert results[0].query_index == 1

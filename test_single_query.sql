@@ -1,0 +1,1 @@
+SELECT order_id, order_total FROM orders

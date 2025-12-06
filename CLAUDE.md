@@ -66,6 +66,8 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for complete project structure and compon
 
 ## CLI Usage
 
+### Single Query Files
+
 ```bash
 # Forward lineage: Find sources for all output columns
 uv run sqlglider lineage query.sql
@@ -87,6 +89,36 @@ uv run sqlglider lineage query.sql --level table
 
 # Different SQL dialect
 uv run sqlglider lineage query.sql --dialect postgres
+```
+
+### Multi-Query Files
+
+SQL Glider supports files with multiple SQL statements separated by semicolons:
+
+```bash
+# Analyze all queries in a file (automatic multi-query detection)
+uv run sqlglider lineage multi_query.sql
+
+# Filter to only queries that reference a specific table
+uv run sqlglider lineage multi_query.sql --table customers
+
+# Analyze specific column across all queries
+uv run sqlglider lineage multi_query.sql --column customers.customer_id
+
+# Export multi-query results to JSON
+uv run sqlglider lineage multi_query.sql --output-format json
+
+# Export multi-query results to CSV (includes query_index column)
+uv run sqlglider lineage multi_query.sql --output-format csv
+
+# Reverse lineage across all queries (impact analysis)
+uv run sqlglider lineage multi_query.sql --source-column customers.customer_id
+
+# Table-level lineage for all queries
+uv run sqlglider lineage multi_query.sql --level table
+
+# Combine table filter with other options
+uv run sqlglider lineage multi_query.sql --table orders --source-column orders.customer_id
 ```
 
 ## Development Guidelines
