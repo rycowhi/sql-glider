@@ -455,3 +455,423 @@ class TestCaseInsensitiveBoundaryConditions:
 
         assert len(results) == 1
         # Should find the column regardless of case differences
+
+
+class TestAnalyzerEdgeCases:
+    """Tests for edge cases in LineageAnalyzer."""
+
+    def test_invalid_sql_raises_parse_error(self):
+        """Test that invalid SQL raises ParseError."""
+        from sqlglot.errors import ParseError
+
+        invalid_sql = "INVALID SQL SYNTAX HERE ;;;;"
+
+        with pytest.raises(ParseError):
+            analyzer = LineageAnalyzer(invalid_sql, dialect="spark")
+            analyzer.analyze_column_lineage()
+
+    def test_empty_sql_raises_error(self):
+        """Test that empty SQL raises an error."""
+        from sqlglot.errors import ParseError
+
+        empty_sql = ""
+
+        with pytest.raises((ParseError, ValueError)):
+            analyzer = LineageAnalyzer(empty_sql, dialect="spark")
+            analyzer.analyze_column_lineage()
+
+    def test_different_dialects(self):
+        """Test analyzer works with different SQL dialects."""
+        sql = "SELECT id, name FROM users"
+
+        for dialect in ["postgres", "mysql", "snowflake", "bigquery"]:
+            analyzer = LineageAnalyzer(sql, dialect=dialect)
+            results = analyzer.analyze_column_lineage()
+            assert len(results) >= 1
+
+    def test_create_table_as_select(self):
+        """Test CTAS (CREATE TABLE AS SELECT) statement."""
+        sql = """
+        CREATE TABLE new_customers AS
+        SELECT
+            customer_id,
+            customer_name,
+            email
+        FROM customers
+        WHERE active = true
+        """
+
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_column_lineage()
+
+        # Should find lineage for the created columns
+        assert len(results) >= 1
+        # Verify source columns are traced
+        column_names = [r.output_column for r in results]
+        assert any("customer_id" in col.lower() for col in column_names)
+
+    def test_insert_into_select(self):
+        """Test INSERT INTO SELECT statement."""
+        sql = """
+        INSERT INTO target_table (id, name, email)
+        SELECT
+            customer_id,
+            customer_name,
+            customer_email
+        FROM customers
+        """
+
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_column_lineage()
+
+        # Should find lineage for inserted columns
+        assert len(results) >= 1
+
+    def test_table_lineage_basic(self):
+        """Test basic table-level lineage."""
+        sql = """
+        SELECT
+            c.customer_id,
+            o.order_total
+        FROM customers c
+        JOIN orders o ON c.id = o.customer_id
+        """
+
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        result = analyzer.analyze_table_lineage()
+
+        assert result.source_tables is not None
+        assert len(result.source_tables) >= 2
+        # Should include both customers and orders
+        source_tables_lower = [t.lower() for t in result.source_tables]
+        assert any("customers" in t for t in source_tables_lower)
+        assert any("orders" in t for t in source_tables_lower)
+
+    def test_table_lineage_with_subquery(self):
+        """Test table lineage with subqueries."""
+        sql = """
+        SELECT
+            main.customer_id,
+            main.total_orders
+        FROM (
+            SELECT
+                customer_id,
+                COUNT(*) as total_orders
+            FROM orders
+            GROUP BY customer_id
+        ) main
+        """
+
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        result = analyzer.analyze_table_lineage()
+
+        assert result.source_tables is not None
+        assert len(result.source_tables) >= 1
+
+    def test_complex_cte_chain(self):
+        """Test complex CTE chains."""
+        sql = """
+        WITH step1 AS (
+            SELECT customer_id, order_date FROM orders
+        ),
+        step2 AS (
+            SELECT customer_id, MIN(order_date) as first_order FROM step1 GROUP BY customer_id
+        ),
+        step3 AS (
+            SELECT s2.customer_id, c.name, s2.first_order
+            FROM step2 s2
+            JOIN customers c ON s2.customer_id = c.id
+        )
+        SELECT * FROM step3
+        """
+
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_column_lineage()
+
+        # Should successfully analyze the CTE chain
+        assert len(results) >= 1
+
+    def test_union_query(self):
+        """Test UNION query."""
+        sql = """
+        SELECT customer_id, order_date FROM orders_2023
+        UNION ALL
+        SELECT customer_id, order_date FROM orders_2024
+        """
+
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_column_lineage()
+
+        # Should find lineage for both sources
+        assert len(results) >= 1
+
+    def test_window_functions(self):
+        """Test queries with window functions."""
+        sql = """
+        SELECT
+            customer_id,
+            order_total,
+            ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY order_date) as row_num,
+            SUM(order_total) OVER (PARTITION BY customer_id) as customer_total
+        FROM orders
+        """
+
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_column_lineage()
+
+        assert len(results) >= 1
+        # Should include window function columns
+        column_names = [r.output_column for r in results]
+        assert any("customer_id" in col.lower() for col in column_names)
+
+    def test_case_expressions(self):
+        """Test CASE expressions."""
+        sql = """
+        SELECT
+            customer_id,
+            CASE
+                WHEN order_total > 1000 THEN 'High'
+                WHEN order_total > 100 THEN 'Medium'
+                ELSE 'Low'
+            END as order_category
+        FROM orders
+        """
+
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_column_lineage()
+
+        assert len(results) >= 1
+
+    def test_aggregate_functions(self):
+        """Test various aggregate functions."""
+        sql = """
+        SELECT
+            customer_id,
+            COUNT(*) as order_count,
+            SUM(order_total) as total_spent,
+            AVG(order_total) as avg_order,
+            MAX(order_date) as last_order,
+            MIN(order_date) as first_order
+        FROM orders
+        GROUP BY customer_id
+        """
+
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_column_lineage()
+
+        assert len(results) >= 2  # At least customer_id and one aggregate
+
+    def test_lateral_view(self):
+        """Test LATERAL VIEW (Spark-specific)."""
+        sql = """
+        SELECT
+            customer_id,
+            tag
+        FROM customers
+        LATERAL VIEW EXPLODE(tags) t AS tag
+        """
+
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_column_lineage()
+
+        assert len(results) >= 1
+
+    def test_qualified_table_names(self):
+        """Test queries with database-qualified table names."""
+        sql = """
+        SELECT
+            c.customer_id,
+            c.customer_name
+        FROM sales_db.customers c
+        JOIN sales_db.orders o ON c.id = o.customer_id
+        """
+
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_column_lineage()
+
+        assert len(results) >= 1
+
+    def test_reverse_lineage_nonexistent_column(self):
+        """Test reverse lineage with nonexistent source column raises error."""
+        sql = "SELECT customer_id, customer_name FROM customers"
+
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+
+        # Should raise ValueError for nonexistent column
+        with pytest.raises(ValueError) as exc_info:
+            analyzer.analyze_reverse_lineage("nonexistent_table.nonexistent_column")
+
+        assert "not found" in str(exc_info.value).lower()
+
+    def test_forward_lineage_nonexistent_column_raises_error(self):
+        """Test forward lineage with nonexistent column raises ValueError."""
+        sql = "SELECT customer_id, customer_name FROM customers"
+
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+
+        with pytest.raises(ValueError) as exc_info:
+            analyzer.analyze_column_lineage(column="nonexistent_column")
+
+        assert "not found" in str(exc_info.value).lower()
+
+    def test_self_join(self):
+        """Test self-join query."""
+        sql = """
+        SELECT
+            e1.employee_id,
+            e1.employee_name,
+            e2.employee_name as manager_name
+        FROM employees e1
+        LEFT JOIN employees e2 ON e1.manager_id = e2.employee_id
+        """
+
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_column_lineage()
+
+        assert len(results) >= 2
+
+    def test_multiple_joins(self):
+        """Test query with multiple joins."""
+        sql = """
+        SELECT
+            c.customer_id,
+            c.customer_name,
+            o.order_id,
+            p.product_name,
+            s.shipment_status
+        FROM customers c
+        JOIN orders o ON c.id = o.customer_id
+        JOIN products p ON o.product_id = p.id
+        JOIN shipments s ON o.id = s.order_id
+        """
+
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_column_lineage()
+
+        assert len(results) >= 4
+
+    def test_nested_subqueries(self):
+        """Test deeply nested subqueries."""
+        sql = """
+        SELECT customer_id, final_total
+        FROM (
+            SELECT customer_id, SUM(order_total) as final_total
+            FROM (
+                SELECT customer_id, order_id, order_total
+                FROM orders
+                WHERE order_date >= '2024-01-01'
+            ) filtered_orders
+            GROUP BY customer_id
+        ) aggregated_orders
+        WHERE final_total > 1000
+        """
+
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_column_lineage()
+
+        assert len(results) >= 1
+
+    def test_column_aliases_with_special_chars(self):
+        """Test column aliases with special characters."""
+        sql = """
+        SELECT
+            customer_id as "Customer ID",
+            customer_name as "Customer Name",
+            order_total as "Total ($)"
+        FROM customers
+        JOIN orders ON customers.id = orders.customer_id
+        """
+
+        analyzer = LineageAnalyzer(sql, dialect="postgres")
+        results = analyzer.analyze_column_lineage()
+
+        assert len(results) >= 1
+
+    def test_distinct_query(self):
+        """Test query with DISTINCT."""
+        sql = """
+        SELECT DISTINCT
+            customer_id,
+            customer_category
+        FROM customers
+        """
+
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_column_lineage()
+
+        assert len(results) >= 2
+
+    def test_order_by_limit(self):
+        """Test query with ORDER BY and LIMIT."""
+        sql = """
+        SELECT
+            customer_id,
+            customer_name,
+            order_total
+        FROM orders
+        ORDER BY order_total DESC
+        LIMIT 10
+        """
+
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_column_lineage()
+
+        assert len(results) >= 1
+
+    def test_having_clause(self):
+        """Test query with HAVING clause."""
+        sql = """
+        SELECT
+            customer_id,
+            COUNT(*) as order_count,
+            SUM(order_total) as total_spent
+        FROM orders
+        GROUP BY customer_id
+        HAVING COUNT(*) > 5
+        """
+
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_column_lineage()
+
+        assert len(results) >= 1
+
+    def test_cross_join(self):
+        """Test CROSS JOIN."""
+        sql = """
+        SELECT
+            c.customer_id,
+            d.date
+        FROM customers c
+        CROSS JOIN dates d
+        """
+
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_column_lineage()
+
+        assert len(results) >= 2
+
+    def test_except_query(self):
+        """Test EXCEPT/MINUS query."""
+        sql = """
+        SELECT customer_id FROM customers_2023
+        EXCEPT
+        SELECT customer_id FROM customers_2024
+        """
+
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_column_lineage()
+
+        assert len(results) >= 1
+
+    def test_intersect_query(self):
+        """Test INTERSECT query."""
+        sql = """
+        SELECT customer_id FROM active_customers
+        INTERSECT
+        SELECT customer_id FROM premium_customers
+        """
+
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_column_lineage()
+
+        assert len(results) >= 1

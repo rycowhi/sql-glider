@@ -29,9 +29,16 @@ This project uses `uv` for Python package management. Python 3.11+ is required.
 ### Testing
 - Run all tests: `uv run pytest`
 - Run with coverage: `uv run pytest --cov=sqlglider --cov-report=term-missing`
+- Run with coverage threshold check: `uv run pytest --cov=sqlglider --cov-fail-under=80`
 - Run specific test file: `uv run pytest tests/test_case_insensitive.py`
 - Run tests matching pattern: `uv run pytest -k "case_insensitive"`
 - Verbose output: `uv run pytest -v`
+- Generate HTML coverage report: `uv run pytest --cov=sqlglider --cov-report=html`
+
+**Coverage Requirements:**
+- Minimum coverage threshold: **80%** (with branch coverage)
+- This threshold is automatically enforced via `pyproject.toml` configuration
+- Tests will fail if coverage drops below 80%
 
 ## Key Dependencies
 
