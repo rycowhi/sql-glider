@@ -215,7 +215,6 @@ class TestCsvFormatter:
         ]
 
         result = CsvFormatter.format(lineage)
-        lines = result.strip().split("\n")
 
         # Should have empty source_table when no table prefix
         assert "customer_name,,name" in result

@@ -59,6 +59,7 @@ src/sqlglider/
 │   ├── analyzer.py           # Core lineage analysis using SQLGlot
 │   └── formatters.py         # Output formatters (text, JSON, CSV)
 └── utils/
+    ├── config.py             # Configuration file loading
     └── file_utils.py         # File I/O utilities
 ```
 
@@ -129,6 +130,36 @@ uv run sqlglider lineage multi_query.sql --table orders --source-column orders.c
 - Docstrings for all public APIs
 - Follow PEP 8 conventions
 - Keep functions focused and small
+
+### Configuration Files
+
+**User Configuration:**
+- `sqlglider.toml` in current working directory provides default CLI options
+- Config is optional - CLI works without it
+- Priority: CLI args > config file > hardcoded defaults
+- Config is project-specific (PWD only, no user-level config)
+
+**Modifying Configurable Options:**
+When adding new configurable CLI options:
+1. Add field to `ConfigSettings` in `src/sqlglider/utils/config.py`
+2. Update CLI option default to `None` in `src/sqlglider/cli.py`
+3. Add priority resolution logic: `value = cli_arg or config.field or default`
+4. Update tests in `tests/sqlglider/utils/test_config.py`
+5. Update `sqlglider.toml.example` with new option
+6. Document in README.md and ARCHITECTURE.md
+
+**Config File Format:**
+```toml
+[sqlglider]
+dialect = "postgres"
+level = "column"
+output_format = "json"
+```
+
+**Supported Options:**
+- `dialect` - SQL dialect (e.g., "postgres", "snowflake", "spark")
+- `level` - Analysis level ("column" or "table")
+- `output_format` - Output format ("text", "json", or "csv")
 
 ### When Making Changes
 1. **Update ARCHITECTURE.md** if you change:

@@ -18,15 +18,26 @@ sql-glider/
 │       │   └── formatters.py        # Output formatters (text, JSON, CSV)
 │       └── utils/
 │           ├── __init__.py          # Utils module exports
+│           ├── config.py            # Configuration file loading
 │           └── file_utils.py        # File I/O utilities
 ├── tests/
 │   ├── __init__.py
-│   ├── test_analyzer.py             # Analyzer unit tests (future)
-│   ├── test_formatters.py           # Formatter unit tests (future)
+│   ├── sqlglider/
+│   │   ├── __init__.py
+│   │   ├── test_cli.py              # CLI integration tests
+│   │   ├── lineage/
+│   │   │   ├── __init__.py
+│   │   │   ├── test_analyzer.py     # Analyzer unit tests
+│   │   │   └── test_formatters.py   # Formatter unit tests
+│   │   └── utils/
+│   │       ├── __init__.py
+│   │       ├── test_config.py       # Config unit tests
+│   │       └── test_file_utils.py   # File utils tests
 │   └── fixtures/
-│       └── sample_queries.sql       # Test SQL files (future)
+│       └── sample_queries.sql       # Test SQL files
 ├── main.py                          # Backward compatibility entry point
 ├── pyproject.toml                   # Project configuration & dependencies
+├── sqlglider.toml.example           # Example configuration file
 ├── ARCHITECTURE.md                  # This file
 ├── CLAUDE.md                        # Claude Code development guidelines
 └── README.md                        # User-facing documentation
@@ -182,6 +193,52 @@ def read_sql_file(file_path: Path) -> str
 - PermissionError: Cannot read file
 - UnicodeDecodeError: File not UTF-8 encoded
 
+### 5. Configuration System (`utils/config.py`)
+
+**Purpose:** Load and manage configuration from `sqlglider.toml`
+
+**Data Model (Pydantic):**
+
+```python
+class ConfigSettings(BaseModel):
+    dialect: Optional[str] = None
+    level: Optional[str] = None
+    output_format: Optional[str] = None
+```
+
+**Key Functions:**
+
+```python
+def find_config_file(start_path: Optional[Path] = None) -> Optional[Path]
+def load_config(config_path: Optional[Path] = None) -> ConfigSettings
+```
+
+**Configuration Priority:**
+1. CLI arguments (explicit user input)
+2. `sqlglider.toml` in current working directory
+3. Hardcoded defaults in CLI
+
+**Error Handling:**
+- Missing config file: Silently continues with defaults (config is optional)
+- Malformed TOML: Warns user to stderr, continues with defaults
+- Invalid values: Warns user, uses defaults for invalid fields
+- Unknown keys: Ignored for forward compatibility
+
+**Configuration File Format:**
+
+```toml
+[sqlglider]
+dialect = "postgres"
+level = "column"
+output_format = "json"
+```
+
+**Design Notes:**
+- Uses Python's built-in `tomllib` (Python 3.11+, zero external dependencies)
+- Config is project-specific (PWD only, no user-level config)
+- Fail-safe: Never crashes on config errors
+- Forward compatible: Ignores unknown settings for future features
+
 ## Technology Stack
 
 ### Core Dependencies
@@ -273,6 +330,30 @@ def read_sql_file(file_path: Path) -> str
 - Create separate `ReverseColumnLineage` model → Rejected due to code duplication and formatter changes required
 - Traverse SQLGlot Node tree from root → Rejected because Node doesn't expose parent/upstream references
 - Build bidirectional graph → Rejected as over-engineering for current needs
+
+### 7. Configuration File Support
+
+**Decision:** Use TOML for project-level configuration with PWD-based discovery and graceful error handling
+
+**Rationale:**
+- **TOML format:** Human-friendly, widely adopted in Python ecosystem (pyproject.toml, Cargo.toml)
+- **Built-in library:** Python 3.11+ includes `tomllib` in standard library (zero dependencies)
+- **PWD-only:** Config in current working directory matches project-based tools (no user-level config complexity)
+- **Graceful degradation:** Config is optional, never blocks execution, warns on errors
+- **Clear priority:** CLI > config > defaults prevents confusion and maintains predictability
+- **Forward compatible:** Unknown keys ignored, allowing future config options without breaking old configs
+- **Precedent for future:** Establishes pattern for application-level defaults with CLI overrides
+
+**Design Pattern:**
+```python
+# Priority resolution
+dialect = cli_arg or config.dialect or "spark"
+```
+
+**Alternative Considered:**
+- JSON/YAML config → Rejected in favor of TOML (more readable, Python ecosystem standard)
+- User-level config (~/.config/sqlglider/) → Rejected to maintain project isolation and simplicity
+- Environment variables → Reserved for future enhancement (SQLGLIDER_CONFIG path override)
 
 ## SQL Dialect Support
 

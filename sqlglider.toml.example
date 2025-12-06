@@ -1,0 +1,57 @@
+# SQL Glider Configuration File
+#
+# Place this file as 'sqlglider.toml' in your project directory.
+# CLI arguments will override these settings.
+#
+# Copy this file: cp sqlglider.toml.example sqlglider.toml
+
+[sqlglider]
+
+# SQL dialect for parsing queries
+# Options: spark, postgres, snowflake, bigquery, mysql, tsql, oracle, presto, trino, redshift, etc.
+# Default: "spark"
+# dialect = "postgres"
+
+# Analysis level
+# Options: "column", "table"
+# Default: "column"
+# level = "column"
+
+# Output format
+# Options: "text", "json", "csv"
+# Default: "text"
+# output_format = "json"
+
+# ============================================================================
+# Example Configurations
+# ============================================================================
+
+# Example 1: PostgreSQL project with JSON output
+# [sqlglider]
+# dialect = "postgres"
+# output_format = "json"
+
+# Example 2: Snowflake project with table-level lineage
+# [sqlglider]
+# dialect = "snowflake"
+# level = "table"
+
+# Example 3: BigQuery project with CSV output
+# [sqlglider]
+# dialect = "bigquery"
+# output_format = "csv"
+
+# ============================================================================
+# Usage
+# ============================================================================
+#
+# With config file:
+#   uv run sqlglider lineage query.sql
+#   (uses dialect and output_format from config)
+#
+# Override config with CLI args:
+#   uv run sqlglider lineage query.sql --dialect snowflake --output-format text
+#   (CLI args take precedence over config)
+#
+# Without config file:
+#   (Uses defaults: spark dialect, column level, text format)

@@ -334,3 +334,252 @@ class TestMainCallback:
         assert result.exit_code == 0
         assert "lineage" in result.stdout.lower()
         assert "--column" in result.stdout or "-c" in result.stdout
+
+
+class TestConfigIntegration:
+    """Tests for configuration file integration with CLI."""
+
+    @pytest.fixture
+    def sample_sql_file(self):
+        """Create a temporary SQL file for testing."""
+        sql_content = """
+        SELECT
+            c.customer_id,
+            c.customer_name,
+            o.order_total
+        FROM customers c
+        JOIN orders o ON c.id = o.customer_id;
+        """
+        with NamedTemporaryFile(
+            mode="w", delete=False, suffix=".sql", encoding="utf-8"
+        ) as f:
+            f.write(sql_content)
+            temp_path = Path(f.name)
+
+        yield temp_path
+
+        # Cleanup
+        temp_path.unlink()
+
+    def test_cli_uses_config_defaults(self, sample_sql_file):
+        """Test that CLI uses config defaults when no args provided."""
+        from tempfile import TemporaryDirectory
+        import os
+
+        with TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            config_file = tmppath / "sqlglider.toml"
+
+            # Write config with postgres dialect
+            config_file.write_text(
+                """
+[sqlglider]
+dialect = "postgres"
+output_format = "json"
+"""
+            )
+
+            # Copy SQL file to temp directory
+            sql_file_in_tmpdir = tmppath / "query.sql"
+            sql_file_in_tmpdir.write_text(sample_sql_file.read_text())
+
+            # Run CLI from the temp directory
+            original_cwd = os.getcwd()
+            try:
+                os.chdir(tmppath)
+                result = runner.invoke(app, ["lineage", "query.sql"])
+
+                assert result.exit_code == 0
+                # Should use JSON format from config
+                assert "{" in result.stdout
+                assert "columns" in result.stdout
+            finally:
+                os.chdir(original_cwd)
+
+    def test_cli_args_override_config(self, sample_sql_file):
+        """Test that CLI args override config values."""
+        from tempfile import TemporaryDirectory
+        import os
+
+        with TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            config_file = tmppath / "sqlglider.toml"
+
+            # Write config with JSON format
+            config_file.write_text(
+                """
+[sqlglider]
+output_format = "json"
+"""
+            )
+
+            # Copy SQL file to temp directory
+            sql_file_in_tmpdir = tmppath / "query.sql"
+            sql_file_in_tmpdir.write_text(sample_sql_file.read_text())
+
+            # Run CLI with explicit text format (should override config)
+            original_cwd = os.getcwd()
+            try:
+                os.chdir(tmppath)
+                result = runner.invoke(
+                    app, ["lineage", "query.sql", "--output-format", "text"]
+                )
+
+                assert result.exit_code == 0
+                # Should use text format (CLI override)
+                assert "----------" in result.stdout
+                # Should NOT be JSON
+                assert not result.stdout.strip().startswith("{")
+            finally:
+                os.chdir(original_cwd)
+
+    def test_cli_missing_config_uses_defaults(self, sample_sql_file):
+        """Test that CLI uses hardcoded defaults when config doesn't exist."""
+        from tempfile import TemporaryDirectory
+        import os
+
+        with TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+
+            # No config file created
+
+            # Copy SQL file to temp directory
+            sql_file_in_tmpdir = tmppath / "query.sql"
+            sql_file_in_tmpdir.write_text(sample_sql_file.read_text())
+
+            # Run CLI without config
+            original_cwd = os.getcwd()
+            try:
+                os.chdir(tmppath)
+                result = runner.invoke(app, ["lineage", "query.sql"])
+
+                assert result.exit_code == 0
+                # Should use default text format
+                assert "----------" in result.stdout
+            finally:
+                os.chdir(original_cwd)
+
+    def test_cli_partial_config(self, sample_sql_file):
+        """Test CLI with partial config (some fields set, others default)."""
+        from tempfile import TemporaryDirectory
+        import os
+
+        with TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            config_file = tmppath / "sqlglider.toml"
+
+            # Write partial config (only dialect)
+            config_file.write_text(
+                """
+[sqlglider]
+dialect = "snowflake"
+"""
+            )
+
+            # Copy SQL file to temp directory
+            sql_file_in_tmpdir = tmppath / "query.sql"
+            sql_file_in_tmpdir.write_text(sample_sql_file.read_text())
+
+            # Run CLI
+            original_cwd = os.getcwd()
+            try:
+                os.chdir(tmppath)
+                result = runner.invoke(app, ["lineage", "query.sql"])
+
+                assert result.exit_code == 0
+                # Should use default text format (not in config)
+                assert "----------" in result.stdout
+            finally:
+                os.chdir(original_cwd)
+
+    def test_cli_priority_order(self, sample_sql_file):
+        """Test priority order: CLI > config > default."""
+        from tempfile import TemporaryDirectory
+        import os
+
+        with TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            config_file = tmppath / "sqlglider.toml"
+
+            # Write config
+            config_file.write_text(
+                """
+[sqlglider]
+dialect = "postgres"
+level = "table"
+output_format = "json"
+"""
+            )
+
+            # Copy SQL file to temp directory
+            sql_file_in_tmpdir = tmppath / "query.sql"
+            sql_file_in_tmpdir.write_text(sample_sql_file.read_text())
+
+            # Run CLI with some overrides
+            original_cwd = os.getcwd()
+            try:
+                os.chdir(tmppath)
+                # Override output_format but keep level from config
+                result = runner.invoke(
+                    app,
+                    [
+                        "lineage",
+                        "query.sql",
+                        "--output-format",
+                        "text",
+                        # level defaults to config (table)
+                    ],
+                )
+
+                assert result.exit_code == 0
+                # Should use text format (CLI override)
+                # and table level (from config)
+                assert "----------" in result.stdout
+                # Table level output should show tables
+                assert "customers" in result.stdout or "orders" in result.stdout
+            finally:
+                os.chdir(original_cwd)
+
+    def test_cli_malformed_config_fallback(self, sample_sql_file):
+        """Test that malformed config falls back to defaults."""
+        from tempfile import TemporaryDirectory
+        import os
+
+        with TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            config_file = tmppath / "sqlglider.toml"
+
+            # Write malformed config
+            config_file.write_text(
+                """
+[sqlglider
+dialect = "postgres"  # Missing closing bracket
+"""
+            )
+
+            # Copy SQL file to temp directory
+            sql_file_in_tmpdir = tmppath / "query.sql"
+            sql_file_in_tmpdir.write_text(sample_sql_file.read_text())
+
+            # Run CLI
+            original_cwd = os.getcwd()
+            try:
+                os.chdir(tmppath)
+                result = runner.invoke(app, ["lineage", "query.sql"])
+
+                # Should still work with defaults
+                assert result.exit_code == 0
+                # Should use default text format
+                assert "----------" in result.stdout
+            finally:
+                os.chdir(original_cwd)
+
+    def test_cli_backward_compatibility(self, sample_sql_file):
+        """Test that CLI still works without config file (backward compatibility)."""
+        # This is the same as test_cli_missing_config_uses_defaults
+        # but explicitly testing backward compatibility
+        result = runner.invoke(app, ["lineage", str(sample_sql_file)])
+
+        assert result.exit_code == 0
+        # Should use default values
+        assert "----------" in result.stdout

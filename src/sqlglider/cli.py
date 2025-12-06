@@ -7,13 +7,14 @@ import typer
 from rich.console import Console
 from sqlglot.errors import ParseError
 
-from sqlglider.lineage.analyzer import LineageAnalyzer, QueryLineage, QueryTableLineage
+from sqlglider.lineage.analyzer import LineageAnalyzer
 from sqlglider.lineage.formatters import (
     CsvFormatter,
     JsonFormatter,
     OutputWriter,
     TextFormatter,
 )
+from sqlglider.utils.config import load_config
 from sqlglider.utils.file_utils import read_sql_file
 
 app = typer.Typer(
@@ -41,17 +42,17 @@ def lineage(
         readable=True,
         help="Path to SQL file to analyze",
     ),
-    level: str = typer.Option(
-        "column",
+    level: Optional[str] = typer.Option(
+        None,
         "--level",
         "-l",
-        help="Analysis level: 'column' or 'table'",
+        help="Analysis level: 'column' or 'table' (default: column, or from config)",
     ),
-    dialect: str = typer.Option(
-        "spark",
+    dialect: Optional[str] = typer.Option(
+        None,
         "--dialect",
         "-d",
-        help="SQL dialect (e.g., spark, postgres, snowflake, bigquery, mysql)",
+        help="SQL dialect (default: spark, or from config)",
     ),
     column: Optional[str] = typer.Option(
         None,
@@ -71,11 +72,11 @@ def lineage(
         "-t",
         help="Filter to only queries that reference this table (for multi-query files)",
     ),
-    output_format: str = typer.Option(
-        "text",
+    output_format: Optional[str] = typer.Option(
+        None,
         "--output-format",
         "-f",
-        help="Output format: 'text', 'json', or 'csv'",
+        help="Output format: 'text', 'json', or 'csv' (default: text, or from config)",
     ),
     output_file: Optional[Path] = typer.Option(
         None,
@@ -86,6 +87,9 @@ def lineage(
 ) -> None:
     """
     Analyze column or table lineage for a SQL file.
+
+    Configuration can be set in sqlglider.toml in the current directory.
+    CLI arguments override configuration file values.
 
     Examples:
 
@@ -107,6 +111,13 @@ def lineage(
         # Use different SQL dialect
         sqlglider lineage query.sql --dialect postgres
     """
+    # Load configuration from sqlglider.toml (if it exists)
+    config = load_config()
+
+    # Apply priority resolution: CLI args > config > defaults
+    dialect = dialect or config.dialect or "spark"
+    level = level or config.level or "column"
+    output_format = output_format or config.output_format or "text"
     # Validate level
     if level not in ["column", "table"]:
         err_console.print(
