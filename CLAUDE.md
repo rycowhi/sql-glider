@@ -312,7 +312,7 @@ When Claude Code completes a planning phase for a new feature or significant cha
 1. Create a `plans/` directory in the project root if it doesn't exist
 2. Save the final plan as a Markdown file in `plans/` with a descriptive name
    - Format: `plans/YYYY-MM-DD-feature-name.md`
-   - Example: `plans/2024-12-05-column-level-lineage.md`
+   - Example: `plans/2025-12-05-column-level-lineage.md`
 3. Include in the plan:
    - Overview of the feature or change
    - Design decisions and rationale
