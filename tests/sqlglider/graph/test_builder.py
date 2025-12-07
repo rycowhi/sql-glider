@@ -356,3 +356,61 @@ class TestGraphBuilderEdgeCases:
             assert len(node_map) > 0
         finally:
             temp_path.unlink()
+
+    def test_skip_non_select_statements(self):
+        """Test that non-SELECT statements are gracefully skipped."""
+        with TemporaryDirectory() as tmpdir:
+            temp_dir = Path(tmpdir)
+
+            # Create a DELETE statement file
+            delete_file = temp_dir / "delete.sql"
+            delete_file.write_text("DELETE FROM customers WHERE customer_id = 123;")
+
+            # Create a valid SELECT file
+            select_file = temp_dir / "select.sql"
+            select_file.write_text("SELECT * FROM orders;")
+
+            # Create an UPDATE statement file
+            update_file = temp_dir / "update.sql"
+            update_file.write_text(
+                "UPDATE products SET price = 10 WHERE product_id = 1;"
+            )
+
+            builder = GraphBuilder()
+            builder.add_file(delete_file)
+            builder.add_file(select_file)
+            builder.add_file(update_file)
+
+            graph = builder.build()
+
+            # Only the SELECT file should be processed
+            assert graph.metadata.total_nodes > 0
+            assert len(graph.metadata.source_files) == 1
+            assert str(select_file.resolve()) in graph.metadata.source_files
+
+            # Two files should be skipped
+            skipped = builder.skipped_files
+            assert len(skipped) == 2
+            assert any(str(delete_file.resolve()) in path for path, _ in skipped)
+            assert any(str(update_file.resolve()) in path for path, _ in skipped)
+            assert all("No SELECT statement found" in reason for _, reason in skipped)
+
+    def test_skipped_files_property(self):
+        """Test access to skipped files list."""
+        with NamedTemporaryFile(
+            mode="w", suffix=".sql", delete=False, encoding="utf-8"
+        ) as f:
+            f.write("TRUNCATE TABLE customers;")
+            temp_path = Path(f.name)
+
+        try:
+            builder = GraphBuilder()
+            builder.add_file(temp_path)
+
+            skipped = builder.skipped_files
+            assert isinstance(skipped, list)
+            assert len(skipped) == 1
+            assert str(temp_path.resolve()) in skipped[0][0]
+            assert "No SELECT statement found" in skipped[0][1]
+        finally:
+            temp_path.unlink()

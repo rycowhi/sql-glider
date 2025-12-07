@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Dict, List, Literal, Optional, Set
 
 import rustworkx as rx
+from rich.console import Console
 
 from sqlglider.graph.models import (
     GraphEdge,
@@ -15,6 +16,8 @@ from sqlglider.graph.models import (
 )
 from sqlglider.lineage.analyzer import LineageAnalyzer
 from sqlglider.utils.file_utils import read_sql_file
+
+console = Console(stderr=True)
 
 
 class GraphBuilder:
@@ -38,6 +41,7 @@ class GraphBuilder:
         self._node_index_map: Dict[str, int] = {}  # identifier -> rustworkx node index
         self._source_files: Set[str] = set()
         self._edge_set: Set[tuple] = set()  # (source, target) for dedup
+        self._skipped_files: List[tuple[str, str]] = []  # (file_path, reason)
 
     def add_file(
         self,
@@ -59,46 +63,55 @@ class GraphBuilder:
             ParseError: If SQL cannot be parsed
         """
         file_dialect = dialect or self.dialect
-        sql_content = read_sql_file(file_path)
-
-        analyzer = LineageAnalyzer(sql_content, dialect=file_dialect)
-        results = analyzer.analyze_queries(level="column")
-
         file_path_str = str(file_path.resolve())
-        self._source_files.add(file_path_str)
 
-        for result in results:
-            query_index = result.metadata.query_index
+        try:
+            sql_content = read_sql_file(file_path)
+            analyzer = LineageAnalyzer(sql_content, dialect=file_dialect)
+            results = analyzer.analyze_queries(level="column")
 
-            for item in result.lineage_items:
-                if not item.source_name:  # Skip empty sources
-                    continue
+            self._source_files.add(file_path_str)
 
-                # Add/get nodes
-                source_node_idx = self._ensure_node(
-                    item.source_name,
-                    file_path_str,
-                    query_index,
-                )
-                target_node_idx = self._ensure_node(
-                    item.output_name,
-                    file_path_str,
-                    query_index,
-                )
+            for result in results:
+                query_index = result.metadata.query_index
 
-                # Add edge (source contributes_to target) - deduplicate
-                edge_key = (item.source_name, item.output_name)
-                if edge_key not in self._edge_set:
-                    edge = GraphEdge(
-                        source_node=item.source_name,
-                        target_node=item.output_name,
-                        file_path=file_path_str,
-                        query_index=query_index,
+                for item in result.lineage_items:
+                    if not item.source_name:  # Skip empty sources
+                        continue
+
+                    # Add/get nodes
+                    source_node_idx = self._ensure_node(
+                        item.source_name,
+                        file_path_str,
+                        query_index,
                     )
-                    self.graph.add_edge(
-                        source_node_idx, target_node_idx, edge.model_dump()
+                    target_node_idx = self._ensure_node(
+                        item.output_name,
+                        file_path_str,
+                        query_index,
                     )
-                    self._edge_set.add(edge_key)
+
+                    # Add edge (source contributes_to target) - deduplicate
+                    edge_key = (item.source_name, item.output_name)
+                    if edge_key not in self._edge_set:
+                        edge = GraphEdge(
+                            source_node=item.source_name,
+                            target_node=item.output_name,
+                            file_path=file_path_str,
+                            query_index=query_index,
+                        )
+                        self.graph.add_edge(
+                            source_node_idx, target_node_idx, edge.model_dump()
+                        )
+                        self._edge_set.add(edge_key)
+
+        except ValueError as e:
+            # Skip files with non-SELECT statements (DELETE, TRUNCATE, etc.)
+            error_msg = str(e)
+            self._skipped_files.append((file_path_str, error_msg))
+            console.print(
+                f"[yellow]Warning:[/yellow] Skipping {file_path_str}: {error_msg}"
+            )
 
         return self
 
@@ -247,6 +260,13 @@ class GraphBuilder:
             total_edges=len(edges),
         )
 
+        # Print summary of skipped files if any
+        if self._skipped_files:
+            console.print(
+                f"\n[yellow]Summary:[/yellow] Skipped {len(self._skipped_files)} "
+                f"file(s) that could not be analyzed for lineage."
+            )
+
         return LineageGraph(
             metadata=metadata,
             nodes=nodes,
@@ -262,3 +282,8 @@ class GraphBuilder:
     def node_index_map(self) -> Dict[str, int]:
         """Get mapping from node identifiers to rustworkx indices."""
         return self._node_index_map.copy()
+
+    @property
+    def skipped_files(self) -> List[tuple[str, str]]:
+        """Get list of files that were skipped during graph building."""
+        return self._skipped_files.copy()
