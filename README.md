@@ -11,6 +11,7 @@ SQL Glider provides powerful column-level and table-level lineage analysis for S
 - **Forward Lineage:** Trace output columns back to their source tables and columns
 - **Reverse Lineage:** Impact analysis - find which output columns are affected by a source column
 - **Multi-level Tracing:** Automatically handles CTEs, subqueries, and complex expressions
+- **Graph-Based Lineage:** Build and query lineage graphs across thousands of SQL files
 - **Multiple Output Formats:** Text (human-readable), JSON (machine-readable), CSV (spreadsheet-ready)
 - **Dialect Support:** Works with Spark, PostgreSQL, Snowflake, BigQuery, MySQL, and many more SQL dialects
 - **File Export:** Save lineage results to files for documentation or further processing
@@ -174,6 +175,43 @@ Query 2: INSERT INTO customer_orders ...
 ...
 ```
 
+### Graph-Based Lineage (Cross-File Analysis)
+
+For analyzing lineage across multiple SQL files, SQL Glider provides graph commands:
+
+```bash
+# Build a lineage graph from a single file
+uv run sqlglider graph build query.sql -o graph.json
+
+# Build from multiple files
+uv run sqlglider graph build query1.sql query2.sql query3.sql -o graph.json
+
+# Build from a directory (recursively finds all .sql files)
+uv run sqlglider graph build ./queries/ -r -o graph.json
+
+# Build from a manifest CSV file
+uv run sqlglider graph build --manifest manifest.csv -o graph.json
+
+# Merge multiple graphs into one
+uv run sqlglider graph merge graph1.json graph2.json -o merged.json
+
+# Query upstream dependencies (find all sources for a column)
+uv run sqlglider graph query graph.json --upstream orders.customer_id
+
+# Query downstream dependencies (find all columns affected by a source)
+uv run sqlglider graph query graph.json --downstream customers.id
+```
+
+**Manifest File Format:**
+```csv
+file_path,dialect
+queries/orders.sql,spark
+queries/customers.sql,postgres
+queries/legacy.sql,
+```
+
+The graph feature is designed for scale - it can handle thousands of SQL files and provides efficient upstream/downstream queries using rustworkx.
+
 ## Use Cases
 
 ### Data Governance
@@ -265,6 +303,50 @@ Options:
 - `--column` and `--source-column` are mutually exclusive. Use one or the other.
 - `--table` filter is useful for multi-query files to analyze only queries that reference a specific table.
 
+### Graph Commands
+
+```
+sqlglider graph build <paths> [OPTIONS]
+
+Arguments:
+  paths                       SQL file(s) or directory to process [optional]
+
+Options:
+  --output, -o                Output JSON file path [required]
+  --manifest, -m              Path to manifest CSV file [optional]
+  --recursive, -r             Recursively search directories [default: True]
+  --glob, -g                  Glob pattern for SQL files [default: *.sql]
+  --dialect, -d               SQL dialect [default: spark]
+  --node-format, -n           Node format: 'qualified' or 'structured' [default: qualified]
+```
+
+```
+sqlglider graph merge <inputs> [OPTIONS]
+
+Arguments:
+  inputs                      JSON graph files to merge [optional]
+
+Options:
+  --output, -o                Output file path [required]
+  --glob, -g                  Glob pattern for graph files [optional]
+```
+
+```
+sqlglider graph query <graph_file> [OPTIONS]
+
+Arguments:
+  graph_file                  Path to graph JSON file [required]
+
+Options:
+  --upstream, -u              Find source columns for this column [optional]
+  --downstream, -d            Find affected columns for this source [optional]
+  --output-format, -f         Output format: 'text', 'json', or 'csv' [default: text]
+```
+
+**Notes:**
+- `--upstream` and `--downstream` are mutually exclusive. Use one or the other.
+- Graph queries are case-insensitive for column matching.
+
 ## Output Formats
 
 ### Text Format (Default)
@@ -339,6 +421,11 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed technical documentation.
 ```
 src/sqlglider/
 ├── cli.py                    # Typer CLI entry point
+├── graph/
+│   ├── builder.py            # Build graphs from SQL files
+│   ├── merge.py              # Merge multiple graphs
+│   ├── query.py              # Query upstream/downstream lineage
+│   └── models.py             # Graph data models
 ├── lineage/
 │   ├── analyzer.py           # Core lineage analysis using SQLGlot
 │   └── formatters.py         # Output formatters (text, JSON, CSV)
@@ -352,6 +439,7 @@ src/sqlglider/
 - **typer:** CLI framework with type hints
 - **rich:** Terminal formatting and colored output
 - **pydantic:** Data validation and serialization
+- **rustworkx:** High-performance graph library for cross-file lineage analysis
 
 ## References
 

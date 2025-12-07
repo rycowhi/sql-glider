@@ -12,6 +12,13 @@ sql-glider/
 │   └── sqlglider/
 │       ├── __init__.py              # Package initialization
 │       ├── cli.py                   # Typer CLI entry point
+│       ├── graph/
+│       │   ├── __init__.py          # Graph module exports
+│       │   ├── models.py            # Pydantic models for graph data
+│       │   ├── builder.py           # GraphBuilder for creating graphs from SQL
+│       │   ├── merge.py             # GraphMerger for combining graphs
+│       │   ├── query.py             # GraphQuerier for upstream/downstream analysis
+│       │   └── serialization.py     # JSON save/load, rustworkx conversion
 │       ├── lineage/
 │       │   ├── __init__.py          # Lineage module exports
 │       │   ├── analyzer.py          # Core lineage analysis logic
@@ -25,6 +32,13 @@ sql-glider/
 │   ├── sqlglider/
 │   │   ├── __init__.py
 │   │   ├── test_cli.py              # CLI integration tests
+│   │   ├── graph/
+│   │   │   ├── __init__.py
+│   │   │   ├── test_models.py       # Graph model tests
+│   │   │   ├── test_builder.py      # GraphBuilder tests
+│   │   │   ├── test_merge.py        # GraphMerger tests
+│   │   │   ├── test_query.py        # GraphQuerier tests
+│   │   │   └── test_serialization.py # Serialization tests
 │   │   ├── lineage/
 │   │   │   ├── __init__.py
 │   │   │   ├── test_analyzer.py     # Analyzer unit tests
@@ -34,7 +48,12 @@ sql-glider/
 │   │       ├── test_config.py       # Config unit tests
 │   │       └── test_file_utils.py   # File utils tests
 │   └── fixtures/
-│       └── sample_queries.sql       # Test SQL files
+│       ├── sample_queries.sql       # Test SQL files
+│       ├── sample_manifest.csv      # Example manifest file
+│       └── multi_file_queries/      # Multi-file test fixtures
+│           ├── customers.sql
+│           ├── orders.sql
+│           └── reports.sql
 ├── main.py                          # Backward compatibility entry point
 ├── pyproject.toml                   # Project configuration & dependencies
 ├── sqlglider.toml.example           # Example configuration file
@@ -219,7 +238,164 @@ Each formatter has a single `format()` method that handles both single and multi
 - Level distinction (column vs table) determined from `results[0].level`
 - Eliminates code duplication across single/multi-query modes
 
-### 4. File Utilities (`utils/file_utils.py`)
+### 4. Graph Module (`graph/`)
+
+**Purpose:** Cross-file lineage analysis at scale using rustworkx graphs
+
+The graph module enables building, merging, and querying lineage graphs from multiple SQL files. It uses rustworkx (a Rust-based graph library) for high-performance graph operations.
+
+#### Data Models (`graph/models.py`)
+
+```python
+class GraphNode(BaseModel):
+    """Represents a column as a graph node."""
+    identifier: str          # Unique key (e.g., "orders.customer_id")
+    file_path: str           # Source file where first encountered
+    query_index: int         # Query index within file
+    schema_name: Optional[str] = None
+    table: Optional[str] = None
+    column: Optional[str] = None
+
+    @classmethod
+    def from_identifier(cls, identifier: str, file_path: str, query_index: int) -> "GraphNode"
+
+class GraphEdge(BaseModel):
+    """Represents a contributes_to relationship."""
+    source_node: str         # Source column identifier
+    target_node: str         # Target column identifier
+    file_path: str           # Where relationship defined
+    query_index: int         # Query index
+
+class GraphMetadata(BaseModel):
+    """Graph-level metadata."""
+    node_format: str = "qualified"
+    default_dialect: str = "spark"
+    source_files: List[str] = []
+    total_nodes: int = 0
+    total_edges: int = 0
+
+class LineageGraph(BaseModel):
+    """Complete graph with metadata, nodes, and edges."""
+    metadata: GraphMetadata
+    nodes: List[GraphNode] = []
+    edges: List[GraphEdge] = []
+
+class ManifestEntry(BaseModel):
+    """Single entry in a manifest file."""
+    file_path: Path
+    dialect: Optional[str] = None
+
+class Manifest(BaseModel):
+    """Collection of manifest entries."""
+    entries: List[ManifestEntry] = []
+
+    @classmethod
+    def from_csv(cls, path: Path) -> "Manifest"
+```
+
+#### Graph Builder (`graph/builder.py`)
+
+```python
+class GraphBuilder:
+    def __init__(self, dialect: str = "spark", node_format: str = "qualified")
+
+    # Add SQL sources
+    def add_file(self, file_path: Path) -> "GraphBuilder"
+    def add_files(self, file_paths: List[Path]) -> "GraphBuilder"
+    def add_directory(self, dir_path: Path, recursive: bool = True, glob_pattern: str = "*.sql") -> "GraphBuilder"
+    def add_manifest(self, manifest_path: Path) -> "GraphBuilder"
+
+    # Build output
+    def build(self) -> LineageGraph
+
+    # Access internal graph
+    @property
+    def rustworkx_graph(self) -> rx.PyDiGraph
+    @property
+    def node_index_map(self) -> Dict[str, int]
+```
+
+**Key Features:**
+- Uses `LineageAnalyzer` internally to extract lineage from each SQL file
+- Nodes are deduplicated by identifier (first occurrence wins)
+- Edges are deduplicated by (source_node, target_node) pair
+- Supports method chaining for fluent API
+
+#### Graph Merger (`graph/merge.py`)
+
+```python
+class GraphMerger:
+    def add_graph(self, graph: LineageGraph) -> "GraphMerger"
+    def add_file(self, file_path: Path) -> "GraphMerger"
+    def add_files(self, file_paths: List[Path]) -> "GraphMerger"
+    def merge(self) -> LineageGraph
+
+def merge_graphs(file_paths: List[Path]) -> LineageGraph
+```
+
+**Key Features:**
+- Combines multiple graphs into one "mega graph"
+- Deduplicates nodes and edges across graphs
+- Aggregates and deduplicates source files from all graphs
+- Convenience `merge_graphs()` function for simple use cases
+
+#### Graph Querier (`graph/query.py`)
+
+```python
+class LineageQueryResult:
+    query_column: str           # Column that was queried
+    direction: str              # "upstream" or "downstream"
+    related_columns: List[GraphNode]  # Related columns found
+
+    def __len__(self) -> int
+    def __iter__(self) -> Iterator[GraphNode]
+
+class GraphQuerier:
+    def __init__(self, graph: LineageGraph)
+
+    @classmethod
+    def from_file(cls, file_path: Path) -> "GraphQuerier"
+
+    def find_upstream(self, column: str) -> LineageQueryResult
+    def find_downstream(self, column: str) -> LineageQueryResult
+    def list_columns(self) -> List[str]
+```
+
+**Key Features:**
+- Uses `rustworkx.ancestors()` for upstream queries
+- Uses `rustworkx.descendants()` for downstream queries
+- Case-insensitive column matching
+- Results sorted alphabetically by identifier
+
+#### Serialization (`graph/serialization.py`)
+
+```python
+def save_graph(graph: LineageGraph, path: Path) -> None
+def load_graph(path: Path) -> LineageGraph
+def to_rustworkx(graph: LineageGraph) -> Tuple[rx.PyDiGraph, Dict[str, int]]
+def from_rustworkx(rx_graph: rx.PyDiGraph, metadata: GraphMetadata) -> LineageGraph
+```
+
+**Format:** JSON using Pydantic's `model_dump_json()` and `model_validate_json()`
+
+#### CLI Commands
+
+```bash
+# Build graph from SQL files
+sqlglider graph build query.sql -o graph.json
+sqlglider graph build ./queries/ -r -o graph.json
+sqlglider graph build --manifest manifest.csv -o graph.json
+
+# Merge multiple graphs
+sqlglider graph merge graph1.json graph2.json -o merged.json
+sqlglider graph merge --glob "*.json" -o merged.json
+
+# Query lineage
+sqlglider graph query graph.json --upstream orders.customer_id
+sqlglider graph query graph.json --downstream customers.id -f json
+```
+
+### 5. File Utilities (`utils/file_utils.py`)
 
 **Purpose:** File I/O operations with proper error handling
 
@@ -292,6 +468,11 @@ output_format = "json"
 - **rich >= 13.0.0:** Terminal formatting and colored output
 
 - **pydantic >= 2.0.0:** Data validation and serialization with type hints
+
+- **rustworkx >= 0.15.0:** High-performance graph library (Rust-based)
+  - Used for graph-based lineage analysis
+  - Provides efficient `ancestors()` and `descendants()` traversal
+  - `PyDiGraph` for directed graph operations
 
 ### Development Dependencies
 
@@ -395,7 +576,38 @@ dialect = cli_arg or config.dialect or "spark"
 - User-level config (~/.config/sqlglider/) → Rejected to maintain project isolation and simplicity
 - Environment variables → Reserved for future enhancement (SQLGLIDER_CONFIG path override)
 
-### 8. Unified Single/Multi-Query Processing
+### 8. Rustworkx for Graph-Based Lineage
+
+**Decision:** Use rustworkx `PyDiGraph` for cross-file lineage analysis
+
+**Rationale:**
+- **High Performance:** Rust-based implementation handles thousands of SQL files efficiently
+- **Built-in Traversal:** `ancestors()` and `descendants()` provide exactly what's needed for upstream/downstream queries
+- **Memory Efficient:** Sparse graph representation minimizes memory usage
+- **Python Integration:** Clean Python API despite Rust implementation
+- **Precedent:** Consistent with sqlglot[rs] using Rust for performance-critical code
+
+**Graph Structure:**
+- **Nodes:** Columns identified by fully qualified name (e.g., "orders.customer_id")
+- **Edges:** Directed edges from source column to target column ("contributes_to" relationship)
+- **Metadata:** File path and query index for traceability
+
+**Deduplication Strategy:**
+- Nodes deduplicated by identifier (first occurrence wins for metadata)
+- Edges deduplicated by (source_node, target_node) pair
+- Source files aggregated and deduplicated across merged graphs
+
+**Serialization:**
+- JSON format using Pydantic's serialization (not rustworkx native serialization)
+- Allows for easy inspection and manipulation of graph files
+- Conversion functions translate between Pydantic models and rustworkx graph
+
+**Alternative Considered:**
+- networkx → Rejected due to Python-only implementation (slower for large graphs)
+- rustworkx native serialization → Rejected in favor of readable JSON format
+- Custom graph implementation → Rejected as unnecessary complexity
+
+### 9. Unified Single/Multi-Query Processing
 
 **Decision:** Treat all SQL files as multi-query (even single-statement files), use unified data models, and consolidate to one `analyze_queries()` method and one `format()` method per formatter
 

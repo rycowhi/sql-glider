@@ -1294,9 +1294,12 @@ class TestMultiQueryIsolation:
         # Query 0: SELECT from customers only
         # Should NOT have any empty sources and should ONLY reference customers table
         query0_items = results[0].lineage_items
-        assert all(item.source_name for item in query0_items), "Query 0 should have no empty sources"
-        assert all("customers" in item.source_name for item in query0_items), \
+        assert all(item.source_name for item in query0_items), (
+            "Query 0 should have no empty sources"
+        )
+        assert all("customers" in item.source_name for item in query0_items), (
             "Query 0 should only reference customers table"
+        )
         # Verify specific columns
         output_to_source = {item.output_name: item.source_name for item in query0_items}
         assert output_to_source["customers.customer_id"] == "customers.customer_id"
@@ -1307,11 +1310,15 @@ class TestMultiQueryIsolation:
         # Should NOT have any empty sources and should ONLY reference orders table
         # CRITICAL: Should NOT reference customers table (this was the bug)
         query1_items = results[1].lineage_items
-        assert all(item.source_name for item in query1_items), "Query 1 should have no empty sources"
-        assert all("orders" in item.source_name for item in query1_items), \
+        assert all(item.source_name for item in query1_items), (
+            "Query 1 should have no empty sources"
+        )
+        assert all("orders" in item.source_name for item in query1_items), (
             "Query 1 should only reference orders table, not customers"
-        assert not any("customers" in item.source_name for item in query1_items), \
+        )
+        assert not any("customers" in item.source_name for item in query1_items), (
             "Query 1 should NOT reference customers table (bug: source leakage)"
+        )
         # Verify specific columns
         output_to_source = {item.output_name: item.source_name for item in query1_items}
         assert output_to_source["orders.order_id"] == "orders.order_id"
@@ -1322,9 +1329,13 @@ class TestMultiQueryIsolation:
         # Query 2: INSERT with JOIN on both customers and orders
         # Should have sources from BOTH tables
         query2_items = results[2].lineage_items
-        assert all(item.source_name for item in query2_items), "Query 2 should have no empty sources"
+        assert all(item.source_name for item in query2_items), (
+            "Query 2 should have no empty sources"
+        )
         sources = [item.source_name for item in query2_items]
-        assert any("customers" in s for s in sources), "Query 2 should reference customers"
+        assert any("customers" in s for s in sources), (
+            "Query 2 should reference customers"
+        )
         assert any("orders" in s for s in sources), "Query 2 should reference orders"
 
     def test_simple_multi_query_isolation(self):

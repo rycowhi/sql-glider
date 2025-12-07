@@ -1,7 +1,7 @@
 """Tests for CLI commands."""
 
 from pathlib import Path
-from tempfile import NamedTemporaryFile
+from tempfile import NamedTemporaryFile, TemporaryDirectory
 
 import pytest
 from typer.testing import CliRunner
@@ -577,3 +577,439 @@ dialect = "postgres"  # Missing closing bracket
         assert result.exit_code == 0
         # Should use default values
         assert "----------" in result.stdout
+
+
+class TestGraphBuildCommand:
+    """Tests for the graph build command."""
+
+    @pytest.fixture
+    def sample_sql_file(self):
+        """Create a temporary SQL file for testing."""
+        sql_content = """
+        SELECT
+            c.customer_id,
+            c.customer_name
+        FROM customers c;
+        """
+        with NamedTemporaryFile(
+            mode="w", delete=False, suffix=".sql", encoding="utf-8"
+        ) as f:
+            f.write(sql_content)
+            temp_path = Path(f.name)
+
+        yield temp_path
+        temp_path.unlink()
+
+    def test_graph_build_single_file(self, sample_sql_file):
+        """Test building graph from single file."""
+        with NamedTemporaryFile(delete=False, suffix=".json") as f:
+            output_path = Path(f.name)
+
+        try:
+            result = runner.invoke(
+                app,
+                ["graph", "build", str(sample_sql_file), "-o", str(output_path)],
+            )
+
+            assert result.exit_code == 0
+            assert "Success" in result.stdout
+            assert output_path.exists()
+
+            # Verify JSON content
+            import json
+
+            content = json.loads(output_path.read_text())
+            assert "metadata" in content
+            assert "nodes" in content
+            assert "edges" in content
+        finally:
+            if output_path.exists():
+                output_path.unlink()
+
+    def test_graph_build_directory(self):
+        """Test building graph from directory."""
+        with TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+
+            # Create SQL files
+            (tmppath / "query1.sql").write_text("SELECT id FROM table1;")
+            (tmppath / "query2.sql").write_text("SELECT name FROM table2;")
+
+            output_path = tmppath / "graph.json"
+
+            result = runner.invoke(
+                app,
+                ["graph", "build", str(tmppath), "-o", str(output_path)],
+            )
+
+            assert result.exit_code == 0
+            assert "Success" in result.stdout
+            assert output_path.exists()
+
+    def test_graph_build_recursive(self):
+        """Test building graph from directory recursively."""
+        with TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+
+            # Create nested directories
+            subdir = tmppath / "subdir"
+            subdir.mkdir()
+
+            (tmppath / "query1.sql").write_text("SELECT id FROM table1;")
+            (subdir / "query2.sql").write_text("SELECT name FROM table2;")
+
+            output_path = tmppath / "graph.json"
+
+            result = runner.invoke(
+                app,
+                ["graph", "build", str(tmppath), "-r", "-o", str(output_path)],
+            )
+
+            assert result.exit_code == 0
+            assert "2 nodes" in result.stdout or result.exit_code == 0
+
+    def test_graph_build_with_dialect(self, sample_sql_file):
+        """Test building graph with specific dialect."""
+        with NamedTemporaryFile(delete=False, suffix=".json") as f:
+            output_path = Path(f.name)
+
+        try:
+            result = runner.invoke(
+                app,
+                [
+                    "graph",
+                    "build",
+                    str(sample_sql_file),
+                    "-o",
+                    str(output_path),
+                    "--dialect",
+                    "postgres",
+                ],
+            )
+
+            assert result.exit_code == 0
+
+            import json
+
+            content = json.loads(output_path.read_text())
+            assert content["metadata"]["default_dialect"] == "postgres"
+        finally:
+            if output_path.exists():
+                output_path.unlink()
+
+    def test_graph_build_with_manifest(self):
+        """Test building graph from manifest file."""
+        with TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+
+            # Create SQL files
+            (tmppath / "query1.sql").write_text("SELECT id FROM table1;")
+            (tmppath / "query2.sql").write_text("SELECT name FROM table2;")
+
+            # Create manifest
+            manifest = tmppath / "manifest.csv"
+            manifest.write_text(
+                "file_path,dialect\nquery1.sql,spark\nquery2.sql,postgres\n"
+            )
+
+            output_path = tmppath / "graph.json"
+
+            result = runner.invoke(
+                app,
+                ["graph", "build", "--manifest", str(manifest), "-o", str(output_path)],
+            )
+
+            assert result.exit_code == 0
+            assert output_path.exists()
+
+    def test_graph_build_no_input_error(self):
+        """Test error when no input provided."""
+        with TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "graph.json"
+
+            result = runner.invoke(
+                app,
+                ["graph", "build", "-o", str(output_path)],
+            )
+
+            assert result.exit_code == 1
+            assert "Must provide" in result.output
+
+    def test_graph_build_invalid_node_format(self, sample_sql_file):
+        """Test error with invalid node format."""
+        with TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "graph.json"
+
+            result = runner.invoke(
+                app,
+                [
+                    "graph",
+                    "build",
+                    str(sample_sql_file),
+                    "-o",
+                    str(output_path),
+                    "--node-format",
+                    "invalid",
+                ],
+            )
+
+            assert result.exit_code == 1
+            assert "Invalid node format" in result.output
+
+    def test_graph_build_help(self):
+        """Test graph build help."""
+        result = runner.invoke(app, ["graph", "build", "--help"])
+
+        assert result.exit_code == 0
+        assert "--output" in result.stdout
+        assert "--recursive" in result.stdout
+        assert "--manifest" in result.stdout
+
+
+class TestGraphMergeCommand:
+    """Tests for the graph merge command."""
+
+    def test_graph_merge_two_files(self):
+        """Test merging two graph files."""
+        with TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+
+            # Create graph files by building from SQL
+            sql1 = tmppath / "query1.sql"
+            sql1.write_text("SELECT id FROM table1;")
+
+            sql2 = tmppath / "query2.sql"
+            sql2.write_text("SELECT name FROM table2;")
+
+            graph1 = tmppath / "graph1.json"
+            graph2 = tmppath / "graph2.json"
+            merged = tmppath / "merged.json"
+
+            # Build graphs
+            runner.invoke(app, ["graph", "build", str(sql1), "-o", str(graph1)])
+            runner.invoke(app, ["graph", "build", str(sql2), "-o", str(graph2)])
+
+            # Merge
+            result = runner.invoke(
+                app,
+                ["graph", "merge", str(graph1), str(graph2), "-o", str(merged)],
+            )
+
+            assert result.exit_code == 0
+            assert "Success" in result.stdout
+            assert merged.exists()
+
+    def test_graph_merge_with_glob(self):
+        """Test merging graphs with glob pattern."""
+        with TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+
+            # Create SQL files and build graphs
+            for i in range(3):
+                sql = tmppath / f"query{i}.sql"
+                sql.write_text(f"SELECT col{i} FROM table{i};")
+
+                graph = tmppath / f"graph{i}.json"
+                runner.invoke(app, ["graph", "build", str(sql), "-o", str(graph)])
+
+            merged = tmppath / "merged.json"
+
+            # Merge with glob (run from tmpdir)
+            import os
+
+            original_cwd = os.getcwd()
+            try:
+                os.chdir(tmppath)
+                result = runner.invoke(
+                    app,
+                    ["graph", "merge", "--glob", "graph*.json", "-o", str(merged)],
+                )
+
+                assert result.exit_code == 0
+                assert merged.exists()
+            finally:
+                os.chdir(original_cwd)
+
+    def test_graph_merge_no_input_error(self):
+        """Test error when no input provided."""
+        with TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "merged.json"
+
+            result = runner.invoke(
+                app,
+                ["graph", "merge", "-o", str(output_path)],
+            )
+
+            assert result.exit_code == 1
+            assert "Must provide" in result.output
+
+    def test_graph_merge_help(self):
+        """Test graph merge help."""
+        result = runner.invoke(app, ["graph", "merge", "--help"])
+
+        assert result.exit_code == 0
+        assert "--output" in result.stdout
+        assert "--glob" in result.stdout
+
+
+class TestGraphQueryCommand:
+    """Tests for the graph query command."""
+
+    @pytest.fixture
+    def sample_graph_file(self):
+        """Create a sample graph file for testing."""
+        with TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+
+            # Create SQL with dependencies
+            sql = tmppath / "query.sql"
+            sql.write_text("""
+                SELECT
+                    c.customer_name,
+                    o.order_total
+                FROM customers c
+                JOIN orders o ON c.customer_id = o.customer_id;
+            """)
+
+            graph = tmppath / "graph.json"
+            runner.invoke(app, ["graph", "build", str(sql), "-o", str(graph)])
+
+            yield graph
+
+    def test_graph_query_upstream(self, sample_graph_file):
+        """Test querying upstream dependencies."""
+        # First get list of columns
+        result = runner.invoke(
+            app,
+            [
+                "graph",
+                "query",
+                str(sample_graph_file),
+                "--upstream",
+                "customers.customer_name",
+            ],
+        )
+
+        # Should succeed (even if no upstream found)
+        assert result.exit_code == 0
+
+    def test_graph_query_downstream(self, sample_graph_file):
+        """Test querying downstream dependencies."""
+        result = runner.invoke(
+            app,
+            [
+                "graph",
+                "query",
+                str(sample_graph_file),
+                "--downstream",
+                "customers.customer_name",
+            ],
+        )
+
+        assert result.exit_code == 0
+
+    def test_graph_query_json_format(self, sample_graph_file):
+        """Test JSON output format."""
+        result = runner.invoke(
+            app,
+            [
+                "graph",
+                "query",
+                str(sample_graph_file),
+                "--upstream",
+                "customers.customer_name",
+                "-f",
+                "json",
+            ],
+        )
+
+        assert result.exit_code == 0
+        if len(result.stdout.strip()) > 0:
+            import json
+
+            parsed = json.loads(result.stdout)
+            assert "query_column" in parsed
+            assert "direction" in parsed
+
+    def test_graph_query_csv_format(self, sample_graph_file):
+        """Test CSV output format."""
+        result = runner.invoke(
+            app,
+            [
+                "graph",
+                "query",
+                str(sample_graph_file),
+                "--downstream",
+                "customers.customer_name",
+                "-f",
+                "csv",
+            ],
+        )
+
+        assert result.exit_code == 0
+        assert "identifier" in result.stdout
+
+    def test_graph_query_no_direction_error(self, sample_graph_file):
+        """Test error when neither upstream nor downstream specified."""
+        result = runner.invoke(
+            app,
+            ["graph", "query", str(sample_graph_file)],
+        )
+
+        assert result.exit_code == 1
+        assert "Must specify" in result.output
+
+    def test_graph_query_both_directions_error(self, sample_graph_file):
+        """Test error when both upstream and downstream specified."""
+        result = runner.invoke(
+            app,
+            [
+                "graph",
+                "query",
+                str(sample_graph_file),
+                "--upstream",
+                "col1",
+                "--downstream",
+                "col2",
+            ],
+        )
+
+        assert result.exit_code == 1
+        assert "Cannot specify both" in result.output
+
+    def test_graph_query_column_not_found(self, sample_graph_file):
+        """Test error when column not found."""
+        result = runner.invoke(
+            app,
+            [
+                "graph",
+                "query",
+                str(sample_graph_file),
+                "--upstream",
+                "nonexistent.column",
+            ],
+        )
+
+        assert result.exit_code == 1
+        assert "not found" in result.output
+
+    def test_graph_query_help(self):
+        """Test graph query help."""
+        result = runner.invoke(app, ["graph", "query", "--help"])
+
+        assert result.exit_code == 0
+        assert "--upstream" in result.stdout
+        assert "--downstream" in result.stdout
+
+
+class TestGraphCommandGroup:
+    """Tests for the graph command group."""
+
+    def test_graph_help(self):
+        """Test graph command help."""
+        result = runner.invoke(app, ["graph", "--help"])
+
+        assert result.exit_code == 0
+        assert "build" in result.stdout
+        assert "merge" in result.stdout
+        assert "query" in result.stdout

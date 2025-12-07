@@ -46,6 +46,7 @@ This project uses `uv` for Python package management. Python 3.11+ is required.
 - **typer**: CLI framework with type hints
 - **rich**: Terminal formatting and colored output
 - **pydantic**: Data validation and serialization
+- **rustworkx**: High-performance graph library for cross-file lineage
 - **ruff**: Fast Python linter and formatter (dev dependency)
 - **pytest**: Testing framework (dev dependency)
 - **pytest-cov**: Coverage plugin for pytest (dev dependency)
@@ -55,6 +56,12 @@ This project uses `uv` for Python package management. Python 3.11+ is required.
 ```
 src/sqlglider/
 ├── cli.py                    # Typer CLI entry point
+├── graph/
+│   ├── builder.py            # Build lineage graphs from SQL files
+│   ├── merge.py              # Merge multiple graphs
+│   ├── query.py              # Query upstream/downstream lineage
+│   ├── models.py             # Graph data models (Pydantic)
+│   └── serialization.py      # JSON save/load for graphs
 ├── lineage/
 │   ├── analyzer.py           # Core lineage analysis using SQLGlot
 │   └── formatters.py         # Output formatters (text, JSON, CSV)
@@ -120,6 +127,46 @@ uv run sqlglider lineage multi_query.sql --level table
 
 # Combine table filter with other options
 uv run sqlglider lineage multi_query.sql --table orders --source-column orders.customer_id
+```
+
+### Graph-Based Lineage (Cross-File Analysis)
+
+```bash
+# Build graph from single file
+uv run sqlglider graph build query.sql -o graph.json
+
+# Build from multiple files
+uv run sqlglider graph build query1.sql query2.sql -o graph.json
+
+# Build from directory (recursive)
+uv run sqlglider graph build ./queries/ -r -o graph.json
+
+# Build with custom glob pattern
+uv run sqlglider graph build ./queries/ -g "*.spark.sql" -o graph.json
+
+# Build from manifest CSV
+uv run sqlglider graph build --manifest manifest.csv -o graph.json
+
+# Build with specific dialect and node format
+uv run sqlglider graph build ./queries/ -o graph.json --dialect postgres --node-format structured
+
+# Merge multiple graphs
+uv run sqlglider graph merge graph1.json graph2.json -o merged.json
+
+# Merge with glob pattern
+uv run sqlglider graph merge --glob "graphs/*.json" -o merged.json
+
+# Query upstream dependencies
+uv run sqlglider graph query graph.json --upstream orders.customer_id
+
+# Query downstream dependencies
+uv run sqlglider graph query graph.json --downstream customers.id
+
+# Query with JSON output
+uv run sqlglider graph query graph.json --upstream orders.total -f json
+
+# Query with CSV output
+uv run sqlglider graph query graph.json --downstream customers.id -f csv
 ```
 
 ## Development Guidelines
@@ -202,6 +249,13 @@ tests/
 ├── __init__.py
 ├── sqlglider/
 │   ├── __init__.py
+│   ├── graph/
+│   │   ├── __init__.py
+│   │   ├── test_builder.py           # Tests for graph builder
+│   │   ├── test_merge.py             # Tests for graph merger
+│   │   ├── test_models.py            # Tests for graph models
+│   │   ├── test_query.py             # Tests for graph querier
+│   │   └── test_serialization.py     # Tests for serialization
 │   ├── lineage/
 │   │   ├── __init__.py
 │   │   ├── test_analyzer.py          # Tests for analyzer.py
@@ -211,7 +265,12 @@ tests/
 │   │   └── test_file_utils.py        # Tests for file_utils.py
 │   └── test_cli.py                   # Tests for cli.py
 └── fixtures/
-    └── sample_queries.sql            # Shared test SQL files
+    ├── sample_queries.sql            # Shared test SQL files
+    ├── sample_manifest.csv           # Example manifest file
+    └── multi_file_queries/           # Multi-file test fixtures
+        ├── customers.sql
+        ├── orders.sql
+        └── reports.sql
 ```
 
 **Naming Convention:**
@@ -418,3 +477,4 @@ Keep plans in the repository as living documents that serve as:
 - Typer documentation: https://typer.tiangolo.com/
 - SQLGlot documentation: https://sqlglot.com/
 - Pydantic documentation: https://docs.pydantic.dev/
+- rustworkx documentation: https://www.rustworkx.org/

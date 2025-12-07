@@ -1,10 +1,12 @@
 """CLI entry point for SQL Glider."""
 
+import json
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 import typer
 from rich.console import Console
+from rich.table import Table
 from sqlglot.errors import ParseError
 
 from sqlglider.lineage.analyzer import LineageAnalyzer
@@ -185,6 +187,385 @@ def lineage(
     except Exception as e:
         err_console.print(f"[red]Error:[/red] Unexpected error: {e}")
         raise typer.Exit(1)
+
+
+# Graph command group
+graph_app = typer.Typer(
+    name="graph",
+    help="Graph-based lineage analysis commands.",
+)
+app.add_typer(graph_app, name="graph")
+
+
+@graph_app.command("build")
+def graph_build(
+    paths: List[Path] = typer.Argument(
+        None,
+        help="SQL file(s) or directory path to process",
+    ),
+    output: Path = typer.Option(
+        ...,
+        "--output",
+        "-o",
+        help="Output file path for serialized graph (required)",
+    ),
+    recursive: bool = typer.Option(
+        False,
+        "--recursive",
+        "-r",
+        help="Recursively search directories for SQL files",
+    ),
+    glob_pattern: str = typer.Option(
+        "*.sql",
+        "--glob",
+        "-g",
+        help="Glob pattern for matching SQL files in directories",
+    ),
+    manifest: Optional[Path] = typer.Option(
+        None,
+        "--manifest",
+        "-m",
+        exists=True,
+        help="Path to manifest CSV file with file_path and optional dialect columns",
+    ),
+    node_format: str = typer.Option(
+        "qualified",
+        "--node-format",
+        "-n",
+        help="Node identifier format: 'qualified' or 'structured'",
+    ),
+    dialect: Optional[str] = typer.Option(
+        None,
+        "--dialect",
+        "-d",
+        help="SQL dialect (default: spark, falls back if not in manifest)",
+    ),
+) -> None:
+    """
+    Build a lineage graph from SQL files.
+
+    Supports multiple input modes:
+    - Single file: sqlglider graph build query.sql -o graph.json
+    - Multiple files: sqlglider graph build query1.sql query2.sql -o graph.json
+    - Directory: sqlglider graph build ./queries/ -r -o graph.json
+    - Manifest: sqlglider graph build --manifest manifest.csv -o graph.json
+
+    Examples:
+
+        # Build from single file
+        sqlglider graph build query.sql -o graph.json
+
+        # Build from directory (recursive)
+        sqlglider graph build ./queries/ -r -o graph.json
+
+        # Build from manifest with custom dialect
+        sqlglider graph build --manifest manifest.csv -o graph.json --dialect postgres
+
+        # Build with structured node format
+        sqlglider graph build query.sql -o graph.json --node-format structured
+    """
+    from sqlglider.graph.builder import GraphBuilder
+    from sqlglider.graph.serialization import save_graph
+
+    # Load config for defaults
+    config = load_config()
+    dialect = dialect or config.dialect or "spark"
+
+    # Validate node format
+    if node_format not in ["qualified", "structured"]:
+        err_console.print(
+            f"[red]Error:[/red] Invalid node format '{node_format}'. "
+            "Use 'qualified' or 'structured'."
+        )
+        raise typer.Exit(1)
+
+    # Validate inputs
+    if not paths and not manifest:
+        err_console.print(
+            "[red]Error:[/red] Must provide either file/directory paths or --manifest option."
+        )
+        raise typer.Exit(1)
+
+    try:
+        builder = GraphBuilder(node_format=node_format, dialect=dialect)
+
+        # Process manifest if provided
+        if manifest:
+            builder.add_manifest(manifest, dialect=dialect)
+
+        # Process paths
+        if paths:
+            for path in paths:
+                if path.is_dir():
+                    builder.add_directory(
+                        path,
+                        recursive=recursive,
+                        glob_pattern=glob_pattern,
+                        dialect=dialect,
+                    )
+                elif path.is_file():
+                    builder.add_file(path, dialect=dialect)
+                else:
+                    err_console.print(f"[red]Error:[/red] Path not found: {path}")
+                    raise typer.Exit(1)
+
+        # Build and save graph
+        graph = builder.build()
+        save_graph(graph, output)
+
+        console.print(
+            f"[green]Success:[/green] Graph saved to {output} "
+            f"({graph.metadata.total_nodes} nodes, {graph.metadata.total_edges} edges)"
+        )
+
+    except FileNotFoundError as e:
+        err_console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+
+    except ParseError as e:
+        err_console.print(f"[red]Error:[/red] Failed to parse SQL: {e}")
+        raise typer.Exit(1)
+
+    except ValueError as e:
+        err_console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+
+    except Exception as e:
+        err_console.print(f"[red]Error:[/red] Unexpected error: {e}")
+        raise typer.Exit(1)
+
+
+@graph_app.command("merge")
+def graph_merge(
+    inputs: List[Path] = typer.Argument(
+        None,
+        help="JSON graph files to merge",
+    ),
+    output: Path = typer.Option(
+        ...,
+        "--output",
+        "-o",
+        help="Output file path for merged graph (required)",
+    ),
+    glob_pattern: Optional[str] = typer.Option(
+        None,
+        "--glob",
+        "-g",
+        help="Glob pattern for matching graph JSON files (e.g., 'graphs/*.json')",
+    ),
+) -> None:
+    """
+    Merge multiple lineage graphs into one.
+
+    Nodes are deduplicated by identifier. Edges are deduplicated by source-target pair.
+
+    Examples:
+
+        # Merge specific files
+        sqlglider graph merge graph1.json graph2.json -o merged.json
+
+        # Merge with glob pattern
+        sqlglider graph merge --glob "graphs/*.json" -o merged.json
+
+        # Combine both
+        sqlglider graph merge extra.json --glob "graphs/*.json" -o merged.json
+    """
+    from sqlglider.graph.merge import GraphMerger
+    from sqlglider.graph.serialization import save_graph
+
+    # Validate inputs
+    if not inputs and not glob_pattern:
+        err_console.print(
+            "[red]Error:[/red] Must provide either graph files or --glob option."
+        )
+        raise typer.Exit(1)
+
+    try:
+        merger = GraphMerger()
+
+        # Process glob pattern if provided
+        if glob_pattern:
+            glob_files = sorted(Path(".").glob(glob_pattern))
+            if not glob_files:
+                err_console.print(
+                    f"[yellow]Warning:[/yellow] No files matched pattern: {glob_pattern}"
+                )
+            for graph_file in glob_files:
+                if graph_file.is_file():
+                    merger.add_file(graph_file)
+
+        # Process explicit inputs
+        if inputs:
+            for graph_file in inputs:
+                if not graph_file.exists():
+                    err_console.print(f"[red]Error:[/red] File not found: {graph_file}")
+                    raise typer.Exit(1)
+                merger.add_file(graph_file)
+
+        # Merge and save
+        merged_graph = merger.merge()
+        save_graph(merged_graph, output)
+
+        console.print(
+            f"[green]Success:[/green] Merged graph saved to {output} "
+            f"({merged_graph.metadata.total_nodes} nodes, {merged_graph.metadata.total_edges} edges, "
+            f"{len(merged_graph.metadata.source_files)} source files)"
+        )
+
+    except FileNotFoundError as e:
+        err_console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+
+    except ValueError as e:
+        err_console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+
+    except Exception as e:
+        err_console.print(f"[red]Error:[/red] Unexpected error: {e}")
+        raise typer.Exit(1)
+
+
+@graph_app.command("query")
+def graph_query(
+    graph_file: Path = typer.Argument(
+        ...,
+        exists=True,
+        help="Path to graph JSON file",
+    ),
+    upstream: Optional[str] = typer.Option(
+        None,
+        "--upstream",
+        "-u",
+        help="Find all source columns that contribute to this column",
+    ),
+    downstream: Optional[str] = typer.Option(
+        None,
+        "--downstream",
+        "-d",
+        help="Find all columns affected by this source column",
+    ),
+    output_format: str = typer.Option(
+        "text",
+        "--output-format",
+        "-f",
+        help="Output format: 'text', 'json', or 'csv'",
+    ),
+) -> None:
+    """
+    Query a lineage graph for upstream or downstream dependencies.
+
+    Examples:
+
+        # Find all source columns for a target
+        sqlglider graph query graph.json --upstream orders.customer_id
+
+        # Find all columns affected by a source
+        sqlglider graph query graph.json --downstream customers.customer_id
+
+        # JSON output
+        sqlglider graph query graph.json --upstream orders.total -f json
+
+        # CSV output
+        sqlglider graph query graph.json --downstream orders.order_id -f csv
+    """
+    from sqlglider.graph.query import GraphQuerier
+
+    # Validate options
+    if not upstream and not downstream:
+        err_console.print(
+            "[red]Error:[/red] Must specify either --upstream or --downstream."
+        )
+        raise typer.Exit(1)
+
+    if upstream and downstream:
+        err_console.print(
+            "[red]Error:[/red] Cannot specify both --upstream and --downstream. "
+            "Choose one direction."
+        )
+        raise typer.Exit(1)
+
+    if output_format not in ["text", "json", "csv"]:
+        err_console.print(
+            f"[red]Error:[/red] Invalid output format '{output_format}'. "
+            "Use 'text', 'json', or 'csv'."
+        )
+        raise typer.Exit(1)
+
+    try:
+        querier = GraphQuerier.from_file(graph_file)
+
+        if upstream:
+            result = querier.find_upstream(upstream)
+        else:
+            result = querier.find_downstream(downstream)
+
+        # Format and output
+        if output_format == "text":
+            _format_query_result_text(result)
+        elif output_format == "json":
+            _format_query_result_json(result)
+        else:  # csv
+            _format_query_result_csv(result)
+
+    except FileNotFoundError as e:
+        err_console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+
+    except ValueError as e:
+        err_console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+
+    except Exception as e:
+        err_console.print(f"[red]Error:[/red] Unexpected error: {e}")
+        raise typer.Exit(1)
+
+
+def _format_query_result_text(result) -> None:
+    """Format query result as text table."""
+    direction_label = (
+        "Sources" if result.direction == "upstream" else "Affected Columns"
+    )
+
+    table = Table(title=f"{direction_label} for '{result.query_column}'")
+    table.add_column("Column", style="cyan")
+    table.add_column("Table", style="green")
+    table.add_column("File", style="dim")
+
+    for node in result.related_columns:
+        table.add_row(
+            node.column or node.identifier,
+            node.table or "",
+            Path(node.file_path).name if node.file_path else "",
+        )
+
+    if len(result) == 0:
+        console.print(
+            f"[yellow]No {direction_label.lower()} found for '{result.query_column}'[/yellow]"
+        )
+    else:
+        console.print(table)
+        console.print(f"\n[dim]Total: {len(result)} column(s)[/dim]")
+
+
+def _format_query_result_json(result) -> None:
+    """Format query result as JSON."""
+    output = {
+        "query_column": result.query_column,
+        "direction": result.direction,
+        "count": len(result),
+        "columns": [node.model_dump() for node in result.related_columns],
+    }
+    print(json.dumps(output, indent=2))
+
+
+def _format_query_result_csv(result) -> None:
+    """Format query result as CSV."""
+    print("identifier,table,column,file_path,query_index")
+    for node in result.related_columns:
+        file_path = node.file_path.replace('"', '""') if node.file_path else ""
+        print(
+            f'"{node.identifier}","{node.table or ""}","{node.column or ""}","{file_path}",{node.query_index}'
+        )
 
 
 if __name__ == "__main__":

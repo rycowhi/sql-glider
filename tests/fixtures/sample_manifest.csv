@@ -1,0 +1,4 @@
+file_path,dialect
+multi_file_queries/customers.sql,spark
+multi_file_queries/orders.sql,spark
+multi_file_queries/reports.sql,spark
