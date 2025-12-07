@@ -1,5 +1,10 @@
 """Lineage analysis module for SQL Glider."""
 
-from sqlglider.lineage.analyzer import ColumnLineage, LineageAnalyzer, TableLineage
+from sqlglider.lineage.analyzer import (
+    LineageAnalyzer,
+    LineageItem,
+    QueryLineageResult,
+    QueryMetadata,
+)
 
-__all__ = ["ColumnLineage", "LineageAnalyzer", "TableLineage"]
+__all__ = ["LineageAnalyzer", "LineageItem", "QueryLineageResult", "QueryMetadata"]

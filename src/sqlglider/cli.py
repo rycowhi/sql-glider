@@ -148,80 +148,21 @@ def lineage(
         # Create analyzer
         analyzer = LineageAnalyzer(sql, dialect=dialect)
 
-        # Check if we have multiple queries
-        has_multiple_queries = len(analyzer.expressions) > 1
+        # Unified lineage analysis (handles both single and multi-query files)
+        results = analyzer.analyze_queries(
+            level=level,
+            column=column,
+            source_column=source_column,
+            table_filter=table_filter,
+        )
 
-        # Analyze based on level
-        if level == "column":
-            # Column-level lineage
-            if source_column:
-                # Reverse lineage (impact analysis)
-                if has_multiple_queries:
-                    # Multi-query reverse lineage
-                    query_results = analyzer.analyze_all_queries_reverse(source_column, table_filter)
-                    # Format as multi-query results
-                    if output_format == "text":
-                        formatted = TextFormatter.format_multi_query(query_results)
-                    elif output_format == "json":
-                        formatted = JsonFormatter.format_multi_query(query_results)
-                    else:  # csv
-                        formatted = CsvFormatter.format_multi_query(query_results)
-                else:
-                    # Single-query reverse lineage
-                    results = analyzer.analyze_reverse_lineage(source_column)
-                    # Format as single-query results
-                    if output_format == "text":
-                        formatted = TextFormatter.format(results)
-                    elif output_format == "json":
-                        formatted = JsonFormatter.format(results)
-                    else:  # csv
-                        formatted = CsvFormatter.format(results)
-            else:
-                # Forward lineage (source tracing)
-                if has_multiple_queries:
-                    # Multi-query mode
-                    query_results = analyzer.analyze_all_queries(column, table_filter)
-                    # Format as multi-query results
-                    if output_format == "text":
-                        formatted = TextFormatter.format_multi_query(query_results)
-                    elif output_format == "json":
-                        formatted = JsonFormatter.format_multi_query(query_results)
-                    else:  # csv
-                        formatted = CsvFormatter.format_multi_query(query_results)
-                else:
-                    # Single-query mode (backward compatibility)
-                    results = analyzer.analyze_column_lineage(column)
-                    # Format as single-query results
-                    if output_format == "text":
-                        formatted = TextFormatter.format(results)
-                    elif output_format == "json":
-                        formatted = JsonFormatter.format(results)
-                    else:  # csv
-                        formatted = CsvFormatter.format(results)
-
-        else:  # table
-            # Table-level lineage
-            if has_multiple_queries:
-                # Multi-query table lineage
-                query_results = analyzer.analyze_all_queries_table_lineage(table_filter)
-                # Format as multi-query table results
-                if output_format == "text":
-                    formatted = TextFormatter.format_multi_query_table(query_results)
-                elif output_format == "json":
-                    formatted = JsonFormatter.format_multi_query_table(query_results)
-                else:  # csv
-                    formatted = CsvFormatter.format_multi_query_table(query_results)
-            else:
-                # Single-query table lineage
-                result = analyzer.analyze_table_lineage()
-
-                # Format output
-                if output_format == "text":
-                    formatted = TextFormatter.format_table(result)
-                elif output_format == "json":
-                    formatted = JsonFormatter.format_table(result)
-                else:  # csv
-                    formatted = CsvFormatter.format_table(result)
+        # Format output based on output format
+        if output_format == "text":
+            formatted = TextFormatter.format(results)
+        elif output_format == "json":
+            formatted = JsonFormatter.format(results)
+        else:  # csv
+            formatted = CsvFormatter.format(results)
 
         # Write output
         OutputWriter.write(formatted, output_file)

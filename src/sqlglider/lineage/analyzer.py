@@ -1,6 +1,6 @@
 """Core lineage analysis using SQLGlot."""
 
-from typing import List, Optional, Set
+from typing import Iterator, Literal, List, Optional, Set, Tuple
 
 from pydantic import BaseModel, Field
 from sqlglot import exp, parse
@@ -8,41 +8,26 @@ from sqlglot.errors import ParseError
 from sqlglot.lineage import Node, lineage
 
 
-class ColumnLineage(BaseModel):
-    """Represents lineage for a single output column."""
+class LineageItem(BaseModel):
+    """Represents a single lineage relationship (output -> source)."""
 
-    output_column: str = Field(..., description="The output column name")
-    source_columns: List[str] = Field(
-        default_factory=list,
-        description="Fully qualified source columns (e.g., table.column)",
-    )
+    output_name: str = Field(..., description="Output column/table name")
+    source_name: str = Field(..., description="Source column/table name")
 
 
-class TableLineage(BaseModel):
-    """Represents lineage for tables."""
+class QueryMetadata(BaseModel):
+    """Query execution context."""
 
-    output_table: str = Field(..., description="The output table name")
-    source_tables: List[str] = Field(
-        default_factory=list, description="Source table names"
-    )
+    query_index: int = Field(..., description="0-based query index")
+    query_preview: str = Field(..., description="First 100 chars of query")
 
 
-class QueryLineage(BaseModel):
-    """Represents lineage for a single query with metadata."""
+class QueryLineageResult(BaseModel):
+    """Complete lineage result for a single query."""
 
-    query_index: int = Field(..., description="Index of the query in the file (0-based)")
-    query_preview: str = Field(..., description="First 100 chars of the query")
-    column_lineage: List[ColumnLineage] = Field(
-        default_factory=list, description="Column lineage results for this query"
-    )
-
-
-class QueryTableLineage(BaseModel):
-    """Represents table-level lineage for a single query with metadata."""
-
-    query_index: int = Field(..., description="Index of the query in the file (0-based)")
-    query_preview: str = Field(..., description="First 100 chars of the query")
-    table_lineage: TableLineage = Field(..., description="Table lineage for this query")
+    metadata: QueryMetadata
+    lineage_items: List[LineageItem] = Field(default_factory=list)
+    level: Literal["column", "table"]
 
 
 class LineageAnalyzer:
@@ -176,231 +161,110 @@ class LineageAnalyzer:
 
         return columns
 
-    def analyze_all_queries(
-        self, column: Optional[str] = None, table_filter: Optional[str] = None
-    ) -> List[QueryLineage]:
+    def analyze_queries(
+        self,
+        level: Literal["column", "table"] = "column",
+        column: Optional[str] = None,
+        source_column: Optional[str] = None,
+        table_filter: Optional[str] = None,
+    ) -> List[QueryLineageResult]:
         """
-        Analyze column lineage for all queries in the SQL file.
+        Unified lineage analysis for single or multi-query files.
+
+        This method replaces all previous analysis methods (analyze_column_lineage,
+        analyze_reverse_lineage, analyze_table_lineage, analyze_all_queries, etc.)
+        with a single unified interface.
 
         Args:
-            column: Optional specific column to analyze. If None, analyzes all columns.
-            table_filter: Optional table name to filter queries by. Only queries that
-                         reference this table will be analyzed.
+            level: Analysis level ("column" or "table")
+            column: Target output column for forward lineage
+            source_column: Source column for reverse lineage (impact analysis)
+            table_filter: Filter queries to those referencing this table
 
         Returns:
-            List of QueryLineage objects, one per query in the file
-        """
-        results = []
-
-        for idx, expr in enumerate(self.expressions):
-            # Temporarily set self.expr to the current expression
-            original_expr = self.expr
-            self.expr = expr
-
-            # Check if we should skip this query based on table filter
-            if table_filter:
-                # Get all tables used in this query
-                query_tables = self._get_query_tables()
-                # Case-insensitive matching
-                table_filter_lower = table_filter.lower()
-                has_table = any(
-                    table_filter_lower in table.lower() for table in query_tables
-                )
-                if not has_table:
-                    # Skip this query
-                    self.expr = original_expr
-                    continue
-
-            try:
-                # If a specific column is requested, check if it exists in this query
-                if column:
-                    output_columns = self.get_output_columns()
-                    column_lower = column.lower()
-                    column_exists = any(
-                        col.lower() == column_lower for col in output_columns
-                    )
-                    if not column_exists:
-                        # Column doesn't exist in this query - skip it
-                        self.expr = original_expr
-                        continue
-
-                # Analyze this query
-                lineage_results = self.analyze_column_lineage(column)
-
-                # Get query preview (first 100 chars, normalized)
-                query_text = expr.sql(dialect=self.dialect)
-                preview = " ".join(query_text.split())[:100]
-                if len(" ".join(query_text.split())) > 100:
-                    preview += "..."
-
-                results.append(
-                    QueryLineage(
-                        query_index=idx,
-                        query_preview=preview,
-                        column_lineage=lineage_results,
-                    )
-                )
-            finally:
-                # Restore original expression
-                self.expr = original_expr
-
-        return results
-
-    def analyze_all_queries_reverse(
-        self, source_column: str, table_filter: Optional[str] = None
-    ) -> List[QueryLineage]:
-        """
-        Analyze reverse lineage (impact analysis) for all queries in the SQL file.
-
-        Args:
-            source_column: Source column to analyze across all queries
-            table_filter: Optional table name to filter queries by
-
-        Returns:
-            List of QueryLineage objects with reverse lineage results
-        """
-        results = []
-
-        for idx, expr in enumerate(self.expressions):
-            # Temporarily set self.expr to the current expression
-            original_expr = self.expr
-            self.expr = expr
-
-            # Check if we should skip this query based on table filter
-            if table_filter:
-                query_tables = self._get_query_tables()
-                table_filter_lower = table_filter.lower()
-                has_table = any(
-                    table_filter_lower in table.lower() for table in query_tables
-                )
-                if not has_table:
-                    self.expr = original_expr
-                    continue
-
-            try:
-                # Check if source column exists in this query
-                # Run forward lineage to get all sources and outputs
-                forward_results = self.analyze_column_lineage(column=None)
-
-                # Build set of all source columns in this query
-                all_sources = set()
-                all_outputs = set()
-                for result in forward_results:
-                    all_sources.update(result.source_columns)
-                    all_outputs.add(result.output_column)
-
-                # Check if our source_column exists (case-insensitive)
-                # It can exist in two ways:
-                # 1. As a source column (derived/referenced from another query/table)
-                # 2. As an output column that references itself (base table column being selected)
-                source_column_lower = source_column.lower()
-                source_exists = any(
-                    source.lower() == source_column_lower for source in all_sources
-                ) or any(
-                    output.lower() == source_column_lower for output in all_outputs
-                )
-
-                if not source_exists:
-                    # Source column doesn't exist in this query - skip it
-                    self.expr = original_expr
-                    continue
-
-                # Analyze reverse lineage for this query
-                lineage_results = self.analyze_reverse_lineage(source_column)
-
-                # Get query preview
-                query_text = expr.sql(dialect=self.dialect)
-                preview = " ".join(query_text.split())[:100]
-                if len(" ".join(query_text.split())) > 100:
-                    preview += "..."
-
-                results.append(
-                    QueryLineage(
-                        query_index=idx,
-                        query_preview=preview,
-                        column_lineage=lineage_results,
-                    )
-                )
-            finally:
-                # Restore original expression
-                self.expr = original_expr
-
-        return results
-
-    def analyze_all_queries_table_lineage(
-        self, table_filter: Optional[str] = None
-    ) -> List["QueryTableLineage"]:
-        """
-        Analyze table-level lineage for all queries in the SQL file.
-
-        Args:
-            table_filter: Optional table name to filter queries by
-
-        Returns:
-            List of QueryTableLineage objects
-        """
-        results = []
-
-        for idx, expr in enumerate(self.expressions):
-            # Temporarily set self.expr to the current expression
-            original_expr = self.expr
-            self.expr = expr
-
-            # Check if we should skip this query based on table filter
-            if table_filter:
-                query_tables = self._get_query_tables()
-                table_filter_lower = table_filter.lower()
-                has_table = any(
-                    table_filter_lower in table.lower() for table in query_tables
-                )
-                if not has_table:
-                    self.expr = original_expr
-                    continue
-
-            try:
-                # Analyze table lineage for this query
-                table_lineage = self.analyze_table_lineage()
-
-                # Get query preview
-                query_text = expr.sql(dialect=self.dialect)
-                preview = " ".join(query_text.split())[:100]
-                if len(" ".join(query_text.split())) > 100:
-                    preview += "..."
-
-                results.append(
-                    QueryTableLineage(
-                        query_index=idx,
-                        query_preview=preview,
-                        table_lineage=table_lineage,
-                    )
-                )
-            finally:
-                # Restore original expression
-                self.expr = original_expr
-
-        return results
-
-    def analyze_column_lineage(
-        self, column: Optional[str] = None
-    ) -> List[ColumnLineage]:
-        """
-        Analyze column lineage for the query.
-
-        Args:
-            column: Optional specific column to analyze. If None, analyzes all columns.
-                    Column matching is case-insensitive.
-
-        Returns:
-            List of ColumnLineage objects representing the lineage for each column
+            List of QueryLineageResult objects (one per query that matches filters)
 
         Raises:
-            ValueError: If the specified column is not found in the query output
+            ValueError: If column or source_column is specified but not found
+
+        Examples:
+            # Forward lineage for all columns
+            results = analyzer.analyze_queries(level="column")
+
+            # Forward lineage for specific column
+            results = analyzer.analyze_queries(level="column", column="customers.id")
+
+            # Reverse lineage (impact analysis)
+            results = analyzer.analyze_queries(level="column", source_column="orders.customer_id")
+
+            # Table-level lineage
+            results = analyzer.analyze_queries(level="table")
+
+            # Filter by table (multi-query files)
+            results = analyzer.analyze_queries(table_filter="customers")
+        """
+        results = []
+
+        for query_index, expr, preview in self._iterate_queries(table_filter):
+            # Temporarily swap self.expr to analyze this query
+            original_expr = self.expr
+            self.expr = expr
+
+            try:
+                lineage_items: List[LineageItem] = []
+
+                if level == "column":
+                    if source_column:
+                        # Reverse lineage (impact analysis)
+                        lineage_items = self._analyze_reverse_lineage_internal(
+                            source_column
+                        )
+                        if not lineage_items:
+                            # Source column not found in this query - skip it
+                            continue
+                    else:
+                        # Forward lineage
+                        lineage_items = self._analyze_column_lineage_internal(column)
+                        if not lineage_items:
+                            # Column not found in this query (if column was specified) - skip it
+                            if column:
+                                continue
+                else:  # table
+                    lineage_items = self._analyze_table_lineage_internal()
+
+                # Create query result
+                results.append(
+                    QueryLineageResult(
+                        metadata=QueryMetadata(
+                            query_index=query_index,
+                            query_preview=preview,
+                        ),
+                        lineage_items=lineage_items,
+                        level=level,
+                    )
+                )
+            finally:
+                # Restore original expression
+                self.expr = original_expr
+
+        return results
+
+    def _analyze_column_lineage_internal(
+        self, column: Optional[str] = None
+    ) -> List[LineageItem]:
+        """
+        Internal method for analyzing column lineage. Returns flat list of LineageItem.
+
+        Args:
+            column: Optional specific column to analyze. If None, analyzes all columns.
+
+        Returns:
+            List of LineageItem objects (one per output-source relationship)
         """
         output_columns = self.get_output_columns()
 
         if column:
             # Analyze only the specified column (case-insensitive matching)
-            # Find the actual column name that matches (preserving original case)
             matched_column = None
             column_lower = column.lower()
             for output_col in output_columns:
@@ -409,19 +273,17 @@ class LineageAnalyzer:
                     break
 
             if matched_column is None:
-                raise ValueError(
-                    f"Column '{column}' not found in query output. "
-                    f"Available columns: {', '.join(output_columns)}"
-                )
+                # Column not found - return empty list (caller will skip this query)
+                return []
             columns_to_analyze = [matched_column]
         else:
             # Analyze all columns
             columns_to_analyze = output_columns
 
-        results = []
+        lineage_items = []
         for col in columns_to_analyze:
             try:
-                # Get the column name that lineage expects (may be different from qualified name)
+                # Get the column name that lineage expects
                 lineage_col = self._column_mapping.get(col, col)
 
                 # Get lineage tree for this column
@@ -431,26 +293,27 @@ class LineageAnalyzer:
                 sources: Set[str] = set()
                 self._collect_source_columns(node, sources)
 
-                results.append(
-                    ColumnLineage(output_column=col, source_columns=sorted(sources))
-                )
+                # Convert to flat LineageItem list (one item per source)
+                for source in sorted(sources):
+                    lineage_items.append(
+                        LineageItem(output_name=col, source_name=source)
+                    )
+
+                # If no sources found, add single item with empty source
+                if not sources:
+                    lineage_items.append(LineageItem(output_name=col, source_name=""))
             except Exception:
-                # If lineage fails for a column, return empty sources
-                # This can happen for literal values or complex expressions
-                results.append(ColumnLineage(output_column=col, source_columns=[]))
+                # If lineage fails for a column, add item with empty source
+                lineage_items.append(LineageItem(output_name=col, source_name=""))
 
-        return results
+        return lineage_items
 
-    def analyze_table_lineage(self) -> TableLineage:
+    def _analyze_table_lineage_internal(self) -> List[LineageItem]:
         """
-        Analyze table-level lineage for the query.
+        Internal method for analyzing table lineage. Returns flat list of LineageItem.
 
         Returns:
-            TableLineage object representing which tables are used
-
-        Note:
-            This is a simplified implementation that finds all table references.
-            For more complex queries (CTEs, subqueries), this may need enhancement.
+            List of LineageItem objects (one per output-source table relationship)
         """
         source_tables: Set[str] = set()
 
@@ -461,63 +324,47 @@ class LineageAnalyzer:
             source_tables.add(table_name)
 
         # The output table would typically be defined in INSERT/CREATE statements
-        # For SELECT statements, we don't have an explicit output table
+        # For SELECT statements, we use a placeholder
         output_table = "query_result"
 
-        return TableLineage(
-            output_table=output_table, source_tables=sorted(source_tables)
-        )
+        # Convert to flat LineageItem list (one item per source table)
+        lineage_items = []
+        for source in sorted(source_tables):
+            lineage_items.append(
+                LineageItem(output_name=output_table, source_name=source)
+            )
 
-    def analyze_reverse_lineage(self, source_column: str) -> List[ColumnLineage]:
+        return lineage_items
+
+    def _analyze_reverse_lineage_internal(
+        self, source_column: str
+    ) -> List[LineageItem]:
         """
-        Analyze reverse lineage (impact analysis) for a source column.
-
-        This method determines which output columns are affected by a given source column.
-        It works by running forward lineage analysis on all output columns, then inverting
-        the dependency graph to find outputs that depend on the specified source.
-
-        Note: This method reuses the ColumnLineage model with semantic field swap:
-        - output_column: The source column being analyzed (what you're looking at)
-        - source_columns: The affected output columns (what gets impacted)
+        Internal method for analyzing reverse lineage. Returns flat list of LineageItem.
 
         Args:
-            source_column: Fully qualified source column to analyze (e.g., "table.column").
-                          Column matching is case-insensitive.
+            source_column: Source column to analyze (e.g., "orders.customer_id")
 
         Returns:
-            List containing one ColumnLineage object where:
-            - output_column = the source column being analyzed
-            - source_columns = list of affected output columns
-
-        Raises:
-            ValueError: If source_column is not found in the query sources
-
-        Example:
-            >>> analyzer = LineageAnalyzer("SELECT customer_id FROM orders")
-            >>> result = analyzer.analyze_reverse_lineage("orders.customer_id")
-            >>> print(result[0].output_column)  # "orders.customer_id"
-            >>> print(result[0].source_columns)  # ["customer_id"]
+            List of LineageItem objects (source column -> affected outputs)
         """
         # Step 1: Run forward lineage on all output columns
-        forward_results = self.analyze_column_lineage(column=None)
+        forward_items = self._analyze_column_lineage_internal(column=None)
 
         # Step 2: Build reverse mapping (source -> [affected outputs])
-        reverse_map: dict[str, list[str]] = {}
-        all_outputs = []
+        reverse_map: dict[str, set[str]] = {}
+        all_outputs = set()
 
-        for result in forward_results:
-            all_outputs.append(result.output_column)
-            for source in result.source_columns:
-                if source not in reverse_map:
-                    reverse_map[source] = []
-                reverse_map[source].append(result.output_column)
+        for item in forward_items:
+            all_outputs.add(item.output_name)
+            if item.source_name:  # Skip empty sources
+                if item.source_name not in reverse_map:
+                    reverse_map[item.source_name] = set()
+                reverse_map[item.source_name].add(item.output_name)
 
-        # Step 3: Validate source exists (case-insensitive matching)
-        # Source can exist in two ways:
-        # 1. As a source column (derived/referenced column)
-        # 2. As an output column that IS the source itself (base table column being selected)
+        # Step 3: Find matching source (case-insensitive)
         matched_source = None
-        affected_outputs = []
+        affected_outputs = set()
         source_column_lower = source_column.lower()
 
         # First check if it's in reverse_map (derived columns)
@@ -527,32 +374,28 @@ class LineageAnalyzer:
                 affected_outputs = reverse_map[matched_source]
                 break
 
-        # If not found, check if it's an output column that references itself
-        # (base table column being selected directly)
+        # If not found, check if it's an output column (base table column)
         if matched_source is None:
             for output in all_outputs:
                 if output.lower() == source_column_lower:
                     matched_source = output
-                    affected_outputs = [output]  # It affects itself (selected directly)
+                    affected_outputs = {output}  # It affects itself
                     break
 
         if matched_source is None:
-            # Gather all available sources including output columns
-            available_sources = set(reverse_map.keys())
-            available_sources.update(all_outputs)
-            available = sorted(available_sources)
-            raise ValueError(
-                f"Source column '{source_column}' not found in query sources or outputs. "
-                f"Available: {', '.join(available)}"
-            )
+            # Source column not found - return empty list (caller will skip this query)
+            return []
 
         # Step 4: Return with semantic swap (source as output, affected as sources)
-        return [
-            ColumnLineage(
-                output_column=matched_source,
-                source_columns=sorted(affected_outputs),
+        # This maintains the LineageItem structure where output_name is what we're looking at
+        # and source_name is what it affects
+        lineage_items = []
+        for affected in sorted(affected_outputs):
+            lineage_items.append(
+                LineageItem(output_name=matched_source, source_name=affected)
             )
-        ]
+
+        return lineage_items
 
     def _get_target_and_select(self) -> tuple[Optional[str], exp.Select]:
         """
@@ -846,3 +689,62 @@ class LineageAnalyzer:
 
         # If we couldn't resolve in any SELECT, return as-is
         return column_name
+
+    def _generate_query_preview(self, expr: exp.Expression) -> str:
+        """
+        Generate a preview string for a query (first 100 chars, normalized).
+
+        Args:
+            expr: The SQL expression to generate a preview for
+
+        Returns:
+            Preview string (first 100 chars with "..." if truncated)
+        """
+        query_text = expr.sql(dialect=self.dialect)
+        preview = " ".join(query_text.split())[:100]
+        if len(" ".join(query_text.split())) > 100:
+            preview += "..."
+        return preview
+
+    def _filter_by_table(self, expr: exp.Expression, table_filter: str) -> bool:
+        """
+        Check if a query references a specific table.
+
+        Args:
+            expr: The SQL expression to check
+            table_filter: Table name to filter by (case-insensitive partial match)
+
+        Returns:
+            True if the query references the table, False otherwise
+        """
+        # Temporarily swap self.expr to analyze this expression
+        original_expr = self.expr
+        self.expr = expr
+        try:
+            query_tables = self._get_query_tables()
+            table_filter_lower = table_filter.lower()
+            return any(table_filter_lower in table.lower() for table in query_tables)
+        finally:
+            self.expr = original_expr
+
+    def _iterate_queries(
+        self, table_filter: Optional[str] = None
+    ) -> Iterator[Tuple[int, exp.Expression, str]]:
+        """
+        Iterate over queries with filtering and preview generation.
+
+        Args:
+            table_filter: Optional table name to filter queries by
+
+        Yields:
+            Tuple of (query_index, expression, query_preview)
+        """
+        for idx, expr in enumerate(self.expressions):
+            # Apply table filter
+            if table_filter and not self._filter_by_table(expr, table_filter):
+                continue
+
+            # Generate preview
+            preview = self._generate_query_preview(expr)
+
+            yield idx, expr, preview
