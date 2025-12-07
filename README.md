@@ -43,13 +43,16 @@ uv run sqlglider lineage query.sql --column customer_name
 
 **Example Output:**
 ```
+==========
+Query 0: SELECT customer_name, o.order_total FROM customers c JOIN orders o ...
+==========
 ----------
 customer_name
 ----------
 c.customer_name
 ```
 
-This shows that the output column `customer_name` comes from `c.customer_name` (the `customer_name` column in table `c`).
+This shows that the output column `customer_name` in Query 0 comes from `c.customer_name` (the `customer_name` column in table `c`).
 
 ### Reverse Lineage (Impact Analysis)
 
@@ -62,6 +65,9 @@ uv run sqlglider lineage query.sql --source-column orders.customer_id
 
 **Example Output:**
 ```
+==========
+Query 0: SELECT customer_id, segment FROM ...
+==========
 ----------
 orders.customer_id
 ----------
@@ -69,7 +75,7 @@ customer_id
 segment
 ```
 
-This shows that if `orders.customer_id` changes, it will impact the output columns `customer_id` and `segment`.
+This shows that if `orders.customer_id` changes, it will impact the output columns `customer_id` and `segment` in Query 0.
 
 ## Usage Examples
 
@@ -117,6 +123,55 @@ uv run sqlglider lineage query.sql --dialect snowflake
 
 # BigQuery
 uv run sqlglider lineage query.sql --dialect bigquery
+```
+
+### Multi-Query Files
+
+SQL Glider automatically detects and analyzes multiple SQL statements in a single file:
+
+```bash
+# Analyze all queries in a file
+uv run sqlglider lineage multi_query.sql
+
+# Filter to only queries that reference a specific table
+uv run sqlglider lineage multi_query.sql --table customers
+
+# Analyze specific column across all queries
+uv run sqlglider lineage multi_query.sql --column customer_id
+
+# Reverse lineage across all queries (impact analysis)
+uv run sqlglider lineage multi_query.sql --source-column orders.customer_id
+```
+
+**Example multi-query file:**
+```sql
+-- multi_query.sql
+SELECT customer_id, customer_name FROM customers;
+
+SELECT order_id, customer_id, order_total FROM orders;
+
+INSERT INTO customer_orders
+SELECT c.customer_id, c.customer_name, o.order_id
+FROM customers c
+JOIN orders o ON c.customer_id = o.customer_id;
+```
+
+**Output includes query index for each statement:**
+```
+==========
+Query 0: SELECT customer_id, customer_name FROM customers
+==========
+...
+
+==========
+Query 1: SELECT order_id, customer_id, order_total FROM orders
+==========
+...
+
+==========
+Query 2: INSERT INTO customer_orders ...
+==========
+...
 ```
 
 ## Use Cases
@@ -200,20 +255,26 @@ Options:
   --dialect, -d               SQL dialect (spark, postgres, snowflake, etc.) [default: spark]
   --column, -c                Specific output column for forward lineage [optional]
   --source-column, -s         Source column for reverse lineage (impact analysis) [optional]
+  --table, -t                 Filter to only queries that reference this table (multi-query files) [optional]
   --output-format, -f         Output format: 'text', 'json', or 'csv' [default: text]
   --output-file, -o           Write output to file instead of stdout [optional]
   --help                      Show help message and exit
 ```
 
-**Note:** `--column` and `--source-column` are mutually exclusive. Use one or the other.
+**Notes:**
+- `--column` and `--source-column` are mutually exclusive. Use one or the other.
+- `--table` filter is useful for multi-query files to analyze only queries that reference a specific table.
 
 ## Output Formats
 
 ### Text Format (Default)
 
-Human-readable format with clear separators:
+Human-readable format with clear separators showing query index and preview:
 
 ```
+==========
+Query 0: SELECT customer_name FROM customers c ...
+==========
 ----------
 customer_name
 ----------
@@ -222,14 +283,21 @@ c.customer_name
 
 ### JSON Format
 
-Machine-readable structured format:
+Machine-readable structured format with query metadata:
 
 ```json
 {
-  "columns": [
+  "queries": [
     {
-      "output_column": "customer_name",
-      "source_columns": ["c.customer_name"]
+      "query_index": 0,
+      "query_preview": "SELECT customer_name FROM customers c ...",
+      "level": "column",
+      "lineage": [
+        {
+          "output_name": "customer_name",
+          "source_name": "c.customer_name"
+        }
+      ]
     }
   ]
 }
@@ -237,12 +305,14 @@ Machine-readable structured format:
 
 ### CSV Format
 
-Spreadsheet-ready tabular format:
+Spreadsheet-ready tabular format with query index:
 
 ```csv
-output_column,source_table,source_column
-customer_name,c,customer_name
+query_index,output_column,source_column
+0,customer_name,c.customer_name
 ```
+
+**Note:** Each source column gets its own row. If an output column has multiple sources, there will be multiple rows with the same `query_index` and `output_column`.
 
 ## Development
 

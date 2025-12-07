@@ -300,11 +300,13 @@ uv add --dev pytest-mock pytest-timeout
 def test_lineage_analysis():
     sql = "SELECT customer_id FROM orders"
     analyzer = LineageAnalyzer(sql, dialect="spark")
-    results = analyzer.analyze_column_lineage()
+    results = analyzer.analyze_queries(level="column")
 
-    assert len(results) == 1
-    assert results[0].output_column == "orders.customer_id"
-    assert results[0].source_columns == ["orders.customer_id"]
+    assert len(results) == 1  # One query
+    assert results[0].metadata.query_index == 0
+    assert len(results[0].lineage_items) == 1  # One column
+    assert results[0].lineage_items[0].output_name == "orders.customer_id"
+    assert results[0].lineage_items[0].source_name == "orders.customer_id"
 ```
 
 #### Testing CLI Commands (Future)
@@ -328,7 +330,7 @@ def test_invalid_sql_raises_parse_error():
 
     with pytest.raises(ParseError):
         analyzer = LineageAnalyzer(sql, dialect="spark")
-        analyzer.analyze_column_lineage()
+        analyzer.analyze_queries(level="column")
 ```
 
 ### Running Tests During Development

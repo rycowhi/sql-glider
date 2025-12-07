@@ -87,13 +87,21 @@ sql-glider/
 **Data Models (Pydantic):**
 
 ```python
-class ColumnLineage(BaseModel):
-    output_column: str
-    source_columns: List[str]  # Fully qualified: table.column
+class LineageItem(BaseModel):
+    """Represents a single lineage relationship (output -> source)."""
+    output_name: str  # Output column/table name
+    source_name: str  # Source column/table name
 
-class TableLineage(BaseModel):
-    output_table: str
-    source_tables: List[str]
+class QueryMetadata(BaseModel):
+    """Query execution context."""
+    query_index: int  # 0-based query index
+    query_preview: str  # First 100 chars of query
+
+class QueryLineageResult(BaseModel):
+    """Complete lineage result for a single query."""
+    metadata: QueryMetadata
+    lineage_items: List[LineageItem]  # Flat list of lineage relationships
+    level: Literal["column", "table"]
 ```
 
 **Key Class:**
@@ -101,11 +109,19 @@ class TableLineage(BaseModel):
 ```python
 class LineageAnalyzer:
     def __init__(self, sql: str, dialect: str = "spark")
-    def get_output_columns(self) -> List[str]
-    def analyze_column_lineage(self, column: Optional[str] = None) -> List[ColumnLineage]
-    def analyze_reverse_lineage(self, source_column: str) -> List[ColumnLineage]
-    def analyze_table_lineage(self) -> TableLineage
-    def _collect_source_columns(self, node: Node, sources: Set[str]) -> None
+    def analyze_queries(
+        self,
+        level: Literal["column", "table"] = "column",
+        column: Optional[str] = None,
+        source_column: Optional[str] = None,
+        table_filter: Optional[str] = None,
+    ) -> List[QueryLineageResult]
+
+    # Internal helper methods
+    def _iterate_queries(self, table_filter: Optional[str] = None) -> Iterator[Tuple[int, Expression, str]]
+    def _analyze_column_lineage_internal(self, column: Optional[str] = None) -> List[LineageItem]
+    def _analyze_reverse_lineage_internal(self, source_column: str) -> List[LineageItem]
+    def _analyze_table_lineage_internal(self) -> List[LineageItem]
 ```
 
 **Implementation Details:**
@@ -139,10 +155,16 @@ class LineageAnalyzer:
 
 **Purpose:** Format lineage results for different output modes
 
+**Unified Formatter Design:**
+Each formatter has a single `format()` method that handles both single and multi-query files, column and table lineage. All outputs include `query_index` for consistency.
+
 **Formatters:**
 
 1. **TextFormatter:**
    ```
+   ==========
+   Query 0: SELECT ...
+   ==========
    ----------
    output_column
    ----------
@@ -153,31 +175,49 @@ class LineageAnalyzer:
 2. **JsonFormatter:**
    ```json
    {
-     "columns": [
+     "queries": [
        {
-         "output_column": "columnA",
-         "source_columns": ["table.col1", "table.col2"]
+         "query_index": 0,
+         "query_preview": "SELECT ...",
+         "level": "column",
+         "lineage": [
+           {"output_name": "table.col_a", "source_name": "table.col_x"},
+           {"output_name": "table.col_a", "source_name": "table.col_y"}
+         ]
        }
      ]
    }
    ```
 
 3. **CsvFormatter:**
+
+   **Column-level:**
    ```csv
-   output_column,source_table,source_column
-   columnA,table1,col1
-   columnA,table1,col2
+   query_index,output_column,source_column
+   0,table.column_a,source_table.column_x
+   0,table.column_a,source_table.column_y
    ```
-   - Parses fully qualified names (`table.column`) to split into table/column
+
+   **Table-level:**
+   ```csv
+   query_index,output_table,source_table
+   0,query_result,customers
+   0,query_result,orders
+   ```
+
+   - Each `LineageItem` becomes one CSV row
+   - Multiple sources for same output → multiple rows
 
 4. **OutputWriter:**
    - Writes to file if `output_file` specified
    - Otherwise prints to stdout
 
 **Design Notes:**
-- All formatters are static methods for simplicity
-- Separate `format()` and `format_table()` methods for column vs table lineage
-- Use Pydantic's `model_dump()` for JSON serialization
+- All formatters use static methods for simplicity
+- Single `format(results: List[QueryLineageResult])` method per formatter
+- Works for both single-query (len=1) and multi-query files transparently
+- Level distinction (column vs table) determined from `results[0].level`
+- Eliminates code duplication across single/multi-query modes
 
 ### 4. File Utilities (`utils/file_utils.py`)
 
@@ -316,20 +356,20 @@ output_format = "json"
 
 ### 6. Reverse Lineage via Graph Inversion
 
-**Decision:** Implement reverse lineage by running forward lineage and inverting the dependency graph, reusing the `ColumnLineage` model with semantic field swap
+**Decision:** Implement reverse lineage by running forward lineage and inverting the dependency graph
 
 **Rationale:**
-- **Leverages existing code:** Reuses robust `analyze_column_lineage()` implementation
+- **Leverages existing code:** Reuses forward lineage implementation internally
 - **Handles edge cases:** Automatically inherits all SQLGlot edge case handling (CTEs, subqueries, complex expressions)
 - **Simple algorithm:** O(n) time complexity with straightforward graph inversion
-- **Zero formatter changes:** Semantic field reuse means all formatters (text, JSON, CSV) work without modification
-- **Maintainability:** Less code to maintain, single data model, consistent API
+- **Works with unified model:** Uses same `QueryLineageResult` / `LineageItem` structure as forward lineage
+- **Maintainability:** Less code to maintain, consistent data flow
 - **Performance:** Negligible overhead even for complex queries (typically <100ms)
 
 **Alternative Considered:**
-- Create separate `ReverseColumnLineage` model → Rejected due to code duplication and formatter changes required
 - Traverse SQLGlot Node tree from root → Rejected because Node doesn't expose parent/upstream references
 - Build bidirectional graph → Rejected as over-engineering for current needs
+- Separate data models for reverse → Rejected in favor of unified `LineageItem` model
 
 ### 7. Configuration File Support
 
@@ -355,6 +395,36 @@ dialect = cli_arg or config.dialect or "spark"
 - User-level config (~/.config/sqlglider/) → Rejected to maintain project isolation and simplicity
 - Environment variables → Reserved for future enhancement (SQLGLIDER_CONFIG path override)
 
+### 8. Unified Single/Multi-Query Processing
+
+**Decision:** Treat all SQL files as multi-query (even single-statement files), use unified data models, and consolidate to one `analyze_queries()` method and one `format()` method per formatter
+
+**Rationale:**
+- **Eliminates duplication:** Removed ~200 lines of duplicated code across 6 analyzer methods, 3 formatter classes, and 12 CLI code paths
+- **Single source of truth:** One method handles all cases (forward, reverse, column, table, single, multi)
+- **Consistent output:** All files show `query_index` (0 for single-query files), making output format predictable
+- **Easier maintenance:** Changes only need to be made in one place
+- **Simpler API:** Users don't need to know if file has single or multiple queries
+- **Query Iterator Pattern:** Centralizes filtering (by table) and preview generation in `_iterate_queries()`
+- **Flattened data model:** `LineageItem` represents individual output→source relationships, simplifying CSV export
+
+**Implementation Details:**
+- Single-query files produce `List[QueryLineageResult]` with length 1 and `query_index=0`
+- Multi-query files produce one `QueryLineageResult` per query with sequential indices
+- CLI simplified from 12 code paths to 3 (based on output format only)
+- Formatters work identically for single and multi-query files
+- `table_filter` parameter allows filtering multi-query files to specific tables
+
+**Benefits:**
+- **Code size:** Reduced from 848 to 749 lines (analyzer), 399 to 192 lines (formatters)
+- **Consistency:** Single-query and multi-query outputs have identical structure
+- **Extensibility:** Easy to add new features (e.g., query filtering) that work for all cases
+- **Testing:** Simpler test suite with fewer code paths to cover
+
+**Alternative Considered:**
+- Maintain separate single/multi methods → Rejected due to ongoing duplication and maintenance burden
+- Detect single vs multi and branch → Rejected as unnecessary complexity when unified approach works for both
+
 ## SQL Dialect Support
 
 SQLGlot supports many SQL dialects out of the box:
@@ -375,49 +445,70 @@ Users can specify any SQLGlot-supported dialect via `--dialect` flag.
 
 ## Lineage Analysis Algorithm
 
-### Column-Level Forward Lineage
+### Unified Query Processing
 
-1. **Parse SQL:** Create AST using `sqlglot.parse_one()`
-2. **Extract Output Columns:** Traverse SELECT expressions
+The `analyze_queries()` method provides a unified interface for all lineage analysis modes:
+
+1. **Parse SQL:** Parse all statements using `sqlglot.parse()` (supports multi-statement SQL)
+2. **Iterate Queries:** Use `_iterate_queries()` to process each query:
+   - Generate query preview (first 100 chars)
+   - Apply table filter if specified
+   - Yield (query_index, expression, preview) tuples
+3. **Analyze Each Query:** Temporarily swap `self.expr` and call appropriate internal method:
+   - **Column forward:** `_analyze_column_lineage_internal(column)`
+   - **Column reverse:** `_analyze_reverse_lineage_internal(source_column)`
+   - **Table-level:** `_analyze_table_lineage_internal()`
+4. **Build Results:** Create `QueryLineageResult` for each query with:
+   - `QueryMetadata` (index and preview)
+   - `List[LineageItem]` (flattened output→source relationships)
+   - `level` ("column" or "table")
+5. **Validate:** If `column` or `source_column` specified but no results found, raise `ValueError`
+6. **Return:** `List[QueryLineageResult]` (one per query)
+
+### Column-Level Forward Lineage (Internal)
+
+The `_analyze_column_lineage_internal()` method:
+
+1. **Extract Output Columns:** Traverse SELECT expressions to find all output columns
+2. **Filter Columns:** If `column` parameter specified, only analyze that column
 3. **For Each Output Column:**
    - Call `sqlglot.lineage.lineage(column, sql, dialect)`
    - Receive a `Node` tree with `downstream` references
    - Recursively traverse tree depth-first
    - Collect leaf nodes (no downstream) as source columns
-   - Sort and deduplicate sources
-4. **Return Results:** List of `ColumnLineage` objects
+4. **Flatten Results:** Create `LineageItem` for each output→source relationship
+5. **Return:** `List[LineageItem]` (each represents one output→source pair)
 
-### Column-Level Reverse Lineage (Impact Analysis)
+### Column-Level Reverse Lineage (Internal)
 
-1. **Run Forward Lineage:** Call `analyze_column_lineage()` for all output columns
+The `_analyze_reverse_lineage_internal()` method:
+
+1. **Run Forward Lineage:** Call `_analyze_column_lineage_internal()` for all output columns
 2. **Build Reverse Map:** Invert the dependency graph
-   - For each forward lineage result (output → sources)
+   - For each `LineageItem` (output → source)
    - Create reverse mapping (source → [outputs])
    - Example: If `customer_id` comes from `orders.customer_id`, map `orders.customer_id` → `customer_id`
-3. **Validate Source Column:** Check that requested source exists in reverse map
-   - If not found, raise `ValueError` with list of available sources
-4. **Return Results:** List containing one `ColumnLineage` object with semantic field swap:
-   - `output_column` = the source column being analyzed
-   - `source_columns` = list of affected output columns (sorted)
-
-**Design Note - Semantic Field Reuse:**
-The reverse lineage reuses the `ColumnLineage` model with inverted semantics. This clever design:
-- Eliminates need for a separate data model
-- Allows all formatters (text, JSON, CSV) to work without modification
-- Maintains API consistency between forward and reverse modes
-- Simplifies the codebase while providing full functionality
+3. **Find Affected Outputs:** Look up the `source_column` in reverse map
+4. **Flatten Results:** Create `LineageItem` for each source→output relationship
+   - Note: Semantics inverted - `output_name` is the source, `source_name` is the affected output
+5. **Return:** `List[LineageItem]` (empty if source_column not found in this query)
 
 **Algorithm Complexity:**
-- Time: O(n + n*m) where n = output columns, m = avg sources per column → O(n*m) typically O(n)
+- Time: O(n + n*m) where n = output columns, m = avg sources per column
 - Space: O(n*m) for the reverse mapping dictionary
 - Performance: Negligible overhead (<100ms even for complex queries with 50+ columns)
 
-### Table-Level Lineage
+### Table-Level Lineage (Internal)
 
-1. **Parse SQL:** Create AST using `sqlglot.parse_one()`
+The `_analyze_table_lineage_internal()` method:
+
+1. **Parse Query:** Use current `self.expr`
 2. **Find All Tables:** Search for `exp.Table` nodes in AST
 3. **Collect Table Names:** Get fully qualified table names
-4. **Return Results:** `TableLineage` object with sources
+4. **Create Results:** Generate `LineageItem` for each source table
+   - `output_name` = "query_result" (or target table for INSERT/CREATE)
+   - `source_name` = source table name
+5. **Return:** `List[LineageItem]`
 
 ### Multi-Level Example
 
