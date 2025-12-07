@@ -295,13 +295,16 @@ class LineageAnalyzer:
             columns_to_analyze = output_columns
 
         lineage_items = []
+        # Get SQL for current expression only (not full multi-query SQL)
+        current_query_sql = self.expr.sql(dialect=self.dialect)
+
         for col in columns_to_analyze:
             try:
                 # Get the column name that lineage expects
                 lineage_col = self._column_mapping.get(col, col)
 
-                # Get lineage tree for this column
-                node = lineage(lineage_col, self.sql, dialect=self.dialect)
+                # Get lineage tree for this column using current query SQL only
+                node = lineage(lineage_col, current_query_sql, dialect=self.dialect)
 
                 # Collect all source columns
                 sources: Set[str] = set()

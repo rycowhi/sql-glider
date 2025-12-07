@@ -1145,26 +1145,31 @@ class TestMultiQueryReverseLineage:
         """
 
     def test_reverse_lineage_all_queries(self, multi_query_sql):
-        """Test reverse lineage across all queries."""
+        """Test reverse lineage finds only queries with the exact column."""
         analyzer = LineageAnalyzer(multi_query_sql, dialect="spark")
         results = analyzer.analyze_queries(
             level="column", source_column="customers.customer_id"
         )
 
-        # Should get results from all 3 queries
-        assert len(results) == 3
+        # Should only get query 0 (which has customers.customer_id)
+        # Query 1 has orders.customer_id (different table, different column)
+        # Query 2 has order_items.customer_id (different table, different column)
+        assert len(results) == 1
         from sqlglider.lineage.analyzer import QueryLineageResult
 
         assert all(isinstance(r, QueryLineageResult) for r in results)
+        assert results[0].metadata.query_index == 0
 
     def test_reverse_lineage_with_table_filter(self, multi_query_sql):
-        """Test reverse lineage with table filter."""
+        """Test reverse lineage with table filter finds correct query."""
         analyzer = LineageAnalyzer(multi_query_sql, dialect="spark")
+
+        # Search for orders.customer_id (not customers.customer_id) with orders table filter
         results = analyzer.analyze_queries(
-            level="column", source_column="customers.customer_id", table_filter="orders"
+            level="column", source_column="orders.customer_id", table_filter="orders"
         )
 
-        # Should only get queries referencing orders table
+        # Should get query 1 which has orders.customer_id from orders table
         assert len(results) == 1
         assert results[0].metadata.query_index == 1
 
@@ -1250,3 +1255,93 @@ class TestMultiQueryTableLineage:
         # Should only get query with products table
         assert len(results) == 1
         assert results[0].metadata.query_index == 1
+
+
+class TestMultiQueryIsolation:
+    """Test that queries are properly isolated in multi-query files."""
+
+    @pytest.fixture
+    def isolated_queries_sql(self):
+        """SQL with queries on different tables that should not share lineage."""
+        return """
+        SELECT customer_id, customer_name, email
+        FROM customers;
+
+        SELECT order_id, customer_id, order_date, order_total
+        FROM orders;
+
+        INSERT INTO customer_summary
+        SELECT
+            c.customer_id,
+            c.customer_name,
+            COUNT(o.order_id) as total_orders,
+            SUM(o.order_total) as total_spent
+        FROM customers c
+        LEFT JOIN orders o ON c.customer_id = o.customer_id
+        GROUP BY c.customer_id, c.customer_name;
+        """
+
+    def test_query_isolation_no_source_leakage(self, isolated_queries_sql):
+        """Test that sources from one query don't leak into another query.
+
+        Regression test for bug where lineage analysis used full multi-query SQL
+        instead of per-query SQL, causing sources from unrelated queries to appear
+        in lineage results.
+        """
+        analyzer = LineageAnalyzer(isolated_queries_sql, dialect="spark")
+        results = analyzer.analyze_queries(level="column")
+
+        # Query 0: SELECT from customers only
+        # Should NOT have any empty sources and should ONLY reference customers table
+        query0_items = results[0].lineage_items
+        assert all(item.source_name for item in query0_items), "Query 0 should have no empty sources"
+        assert all("customers" in item.source_name for item in query0_items), \
+            "Query 0 should only reference customers table"
+        # Verify specific columns
+        output_to_source = {item.output_name: item.source_name for item in query0_items}
+        assert output_to_source["customers.customer_id"] == "customers.customer_id"
+        assert output_to_source["customers.customer_name"] == "customers.customer_name"
+        assert output_to_source["customers.email"] == "customers.email"
+
+        # Query 1: SELECT from orders only
+        # Should NOT have any empty sources and should ONLY reference orders table
+        # CRITICAL: Should NOT reference customers table (this was the bug)
+        query1_items = results[1].lineage_items
+        assert all(item.source_name for item in query1_items), "Query 1 should have no empty sources"
+        assert all("orders" in item.source_name for item in query1_items), \
+            "Query 1 should only reference orders table, not customers"
+        assert not any("customers" in item.source_name for item in query1_items), \
+            "Query 1 should NOT reference customers table (bug: source leakage)"
+        # Verify specific columns
+        output_to_source = {item.output_name: item.source_name for item in query1_items}
+        assert output_to_source["orders.order_id"] == "orders.order_id"
+        assert output_to_source["orders.customer_id"] == "orders.customer_id"
+        assert output_to_source["orders.order_date"] == "orders.order_date"
+        assert output_to_source["orders.order_total"] == "orders.order_total"
+
+        # Query 2: INSERT with JOIN on both customers and orders
+        # Should have sources from BOTH tables
+        query2_items = results[2].lineage_items
+        assert all(item.source_name for item in query2_items), "Query 2 should have no empty sources"
+        sources = [item.source_name for item in query2_items]
+        assert any("customers" in s for s in sources), "Query 2 should reference customers"
+        assert any("orders" in s for s in sources), "Query 2 should reference orders"
+
+    def test_simple_multi_query_isolation(self):
+        """Test simple case of two independent queries with no shared tables."""
+        sql = """
+        SELECT product_id, product_name FROM products;
+        SELECT order_id, order_total FROM orders;
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_queries(level="column")
+
+        # Query 0: Should only reference products
+        query0_sources = [item.source_name for item in results[0].lineage_items]
+        assert all("products" in s for s in query0_sources)
+        assert not any("orders" in s for s in query0_sources)
+
+        # Query 1: Should only reference orders
+        query1_sources = [item.source_name for item in results[1].lineage_items]
+        assert all("orders" in s for s in query1_sources)
+        assert not any("products" in s for s in query1_sources)
