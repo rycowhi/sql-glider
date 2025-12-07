@@ -1,9 +1,30 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
 name = "sql-glider"
 version = "0.1.0"
 description = "SQL Utility Toolkit for better understanding, use, and governance of your queries in a native environment."
 readme = "README.md"
+license = "Apache-2.0"
 requires-python = ">=3.11"
+authors = [
+    { name = "Ryan Whitcomb", email = "ryankwhitcomb@gmail.com" }
+]
+keywords = ["sql", "lineage", "data-lineage", "sqlglot", "data-governance"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Database",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
 dependencies = [
     "sqlglot[rs]>=25.0.0",
     "typer>=0.9.0",
@@ -11,6 +32,11 @@ dependencies = [
     "pydantic>=2.0.0",
     "rustworkx>=0.15.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/rycowhi/sql-glider/"
+Repository = "https://github.com/rycowhi/sql-glider/"
+Documentation = "https://github.com/rycowhi/sql-glider/"
 
 [project.scripts]
 sqlglider = "sqlglider.cli:app"
@@ -60,3 +86,14 @@ exclude_lines = [
     "if TYPE_CHECKING:",
     "@abstractmethod",
 ]
+
+# Publishing configuration for uv
+[[tool.uv.index]]
+name = "testpypi"
+url = "https://test.pypi.org/simple/"
+publish-url = "https://test.pypi.org/legacy/"
+
+[[tool.uv.index]]
+name = "pypi"
+url = "https://pypi.org/simple/"
+publish-url = "https://upload.pypi.org/legacy/"
