@@ -247,6 +247,20 @@ class LineageAnalyzer:
                 # Restore original expression
                 self.expr = original_expr
 
+        # Validate: if a specific column or source_column was specified and we got no results,
+        # raise ValueError to preserve backward compatibility
+        if not results:
+            if column:
+                raise ValueError(
+                    f"Column '{column}' not found in any query. "
+                    "Please check the column name and try again."
+                )
+            elif source_column:
+                raise ValueError(
+                    f"Source column '{source_column}' not found in any query. "
+                    "Please check the column name and try again."
+                )
+
         return results
 
     def _analyze_column_lineage_internal(

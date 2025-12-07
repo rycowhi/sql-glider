@@ -100,10 +100,11 @@ class TestCaseInsensitiveForwardLineage:
     ):
         """Test that column matching is case-insensitive for simple queries."""
         analyzer = LineageAnalyzer(simple_query, dialect="spark")
-        results = analyzer.analyze_column_lineage(column=column_input)
+        results = analyzer.analyze_queries(level="column", column=column_input)
 
         assert len(results) == 1
-        assert results[0].output_column == expected_output_column
+        assert len(results[0].lineage_items) == 1
+        assert results[0].lineage_items[0].output_name == expected_output_column
 
     @pytest.mark.parametrize(
         "column_input,expected_output_column,expected_sources",
@@ -153,11 +154,13 @@ class TestCaseInsensitiveForwardLineage:
     ):
         """Test case-insensitive matching for queries with CTEs and DML."""
         analyzer = LineageAnalyzer(cte_query, dialect="spark")
-        results = analyzer.analyze_column_lineage(column=column_input)
+        results = analyzer.analyze_queries(level="column", column=column_input)
 
         assert len(results) == 1
-        assert results[0].output_column == expected_output_column
-        assert results[0].source_columns == expected_sources
+        assert len(results[0].lineage_items) == len(expected_sources)
+        assert results[0].lineage_items[0].output_name == expected_output_column
+        actual_sources = [item.source_name for item in results[0].lineage_items]
+        assert actual_sources == expected_sources
 
     @pytest.mark.parametrize(
         "column_input,expected_output_column",
@@ -181,17 +184,18 @@ class TestCaseInsensitiveForwardLineage:
     ):
         """Test case-insensitive matching for queries with subqueries."""
         analyzer = LineageAnalyzer(subquery_query, dialect="spark")
-        results = analyzer.analyze_column_lineage(column=column_input)
+        results = analyzer.analyze_queries(level="column", column=column_input)
 
         assert len(results) == 1
-        assert results[0].output_column == expected_output_column
+        assert len(results[0].lineage_items) >= 1
+        assert results[0].lineage_items[0].output_name == expected_output_column
 
     def test_column_not_found_preserves_case_in_error(self, simple_query):
         """Test that error messages preserve the user's input case."""
         analyzer = LineageAnalyzer(simple_query, dialect="spark")
 
         with pytest.raises(ValueError) as exc_info:
-            analyzer.analyze_column_lineage(column="NONEXISTENT.COLUMN")
+            analyzer.analyze_queries(level="column", column="NONEXISTENT.COLUMN")
 
         error_message = str(exc_info.value)
         assert "NONEXISTENT.COLUMN" in error_message
@@ -200,11 +204,12 @@ class TestCaseInsensitiveForwardLineage:
     def test_all_columns_ignores_case_parameter(self, simple_query):
         """Test that omitting column parameter returns all columns regardless of case."""
         analyzer = LineageAnalyzer(simple_query, dialect="spark")
-        results = analyzer.analyze_column_lineage(column=None)
+        results = analyzer.analyze_queries(level="column", column=None)
 
-        # Should return all 4 columns
-        assert len(results) == 4
-        output_columns = {r.output_column for r in results}
+        # Should return 1 query result with 4 lineage items
+        assert len(results) == 1
+        assert len(results[0].lineage_items) == 4
+        output_columns = {item.output_name for item in results[0].lineage_items}
         assert "orders.order_id" in output_columns
         assert "orders.customer_id" in output_columns
         assert "customers.customer_name" in output_columns
@@ -303,15 +308,21 @@ class TestCaseInsensitiveReverseLineage:
         ],
     )
     def test_simple_query_reverse_case_variations(
-        self, simple_query, source_input, expected_source_column, expected_affected_outputs
+        self,
+        simple_query,
+        source_input,
+        expected_source_column,
+        expected_affected_outputs,
     ):
         """Test that source column matching is case-insensitive for simple queries."""
         analyzer = LineageAnalyzer(simple_query, dialect="spark")
-        results = analyzer.analyze_reverse_lineage(source_column=source_input)
+        results = analyzer.analyze_queries(level="column", source_column=source_input)
 
         assert len(results) == 1
-        assert results[0].output_column == expected_source_column
-        assert results[0].source_columns == expected_affected_outputs
+        assert len(results[0].lineage_items) == len(expected_affected_outputs)
+        assert results[0].lineage_items[0].output_name == expected_source_column
+        actual_affected = [item.source_name for item in results[0].lineage_items]
+        assert actual_affected == expected_affected_outputs
 
     @pytest.mark.parametrize(
         "source_input,expected_source_column,expected_affected_outputs",
@@ -361,18 +372,20 @@ class TestCaseInsensitiveReverseLineage:
     ):
         """Test case-insensitive reverse lineage for queries with CTEs and DML."""
         analyzer = LineageAnalyzer(cte_query, dialect="spark")
-        results = analyzer.analyze_reverse_lineage(source_column=source_input)
+        results = analyzer.analyze_queries(level="column", source_column=source_input)
 
         assert len(results) == 1
-        assert results[0].output_column == expected_source_column
-        assert results[0].source_columns == expected_affected_outputs
+        assert len(results[0].lineage_items) == len(expected_affected_outputs)
+        assert results[0].lineage_items[0].output_name == expected_source_column
+        actual_affected = [item.source_name for item in results[0].lineage_items]
+        assert actual_affected == expected_affected_outputs
 
     def test_source_column_not_found_preserves_case_in_error(self, simple_query):
         """Test that error messages preserve the user's input case for reverse lineage."""
         analyzer = LineageAnalyzer(simple_query, dialect="spark")
 
         with pytest.raises(ValueError) as exc_info:
-            analyzer.analyze_reverse_lineage(source_column="NONEXISTENT.SOURCE")
+            analyzer.analyze_queries(level="column", source_column="NONEXISTENT.SOURCE")
 
         error_message = str(exc_info.value)
         assert "NONEXISTENT.SOURCE" in error_message
@@ -388,10 +401,17 @@ class TestCaseInsensitiveBoundaryConditions:
         analyzer = LineageAnalyzer(sql, dialect="spark")
 
         # Try both cases
-        results_lower = analyzer.analyze_column_lineage(column="single_table.column_name")
-        results_upper = analyzer.analyze_column_lineage(column="SINGLE_TABLE.COLUMN_NAME")
+        results_lower = analyzer.analyze_queries(
+            level="column", column="single_table.column_name"
+        )
+        results_upper = analyzer.analyze_queries(
+            level="column", column="SINGLE_TABLE.COLUMN_NAME"
+        )
 
-        assert results_lower[0].output_column == results_upper[0].output_column
+        assert (
+            results_lower[0].lineage_items[0].output_name
+            == results_upper[0].lineage_items[0].output_name
+        )
 
     def test_special_characters_in_column_names(self):
         """Test case-insensitive matching with special characters in column names."""
@@ -404,8 +424,9 @@ class TestCaseInsensitiveBoundaryConditions:
         analyzer = LineageAnalyzer(sql, dialect="spark")
 
         # Note: This tests current behavior - may need adjustment based on SQLGlot's handling
-        results = analyzer.analyze_column_lineage(column=None)
-        assert len(results) >= 1
+        results = analyzer.analyze_queries(level="column", column=None)
+        assert len(results) == 1
+        assert len(results[0].lineage_items) >= 1
 
     def test_unicode_column_names_case_insensitive(self):
         """Test case-insensitive matching with unicode characters."""
@@ -418,8 +439,9 @@ class TestCaseInsensitiveBoundaryConditions:
         analyzer = LineageAnalyzer(sql, dialect="spark")
 
         # Unicode case folding should work
-        results = analyzer.analyze_column_lineage(column=None)
-        assert len(results) >= 1
+        results = analyzer.analyze_queries(level="column", column=None)
+        assert len(results) == 1
+        assert len(results[0].lineage_items) >= 1
 
     @pytest.mark.parametrize(
         "query_case,column_case",
@@ -432,26 +454,34 @@ class TestCaseInsensitiveBoundaryConditions:
     def test_cross_case_matching(self, query_case, column_case):
         """Test that query case and search case can differ."""
         # Create query with specific case
-        table_name = "orders" if query_case == "lower" else (
-            "ORDERS" if query_case == "UPPER" else "OrDeRs"
+        table_name = (
+            "orders"
+            if query_case == "lower"
+            else ("ORDERS" if query_case == "UPPER" else "OrDeRs")
         )
-        col_name = "order_id" if query_case == "lower" else (
-            "ORDER_ID" if query_case == "UPPER" else "OrDeR_iD"
+        col_name = (
+            "order_id"
+            if query_case == "lower"
+            else ("ORDER_ID" if query_case == "UPPER" else "OrDeR_iD")
         )
 
         sql = f"SELECT {col_name} FROM {table_name}"
         analyzer = LineageAnalyzer(sql, dialect="spark")
 
         # Search with different case
-        search_table = "orders" if column_case == "lower" else (
-            "ORDERS" if column_case == "UPPER" else "oRdErS"
+        search_table = (
+            "orders"
+            if column_case == "lower"
+            else ("ORDERS" if column_case == "UPPER" else "oRdErS")
         )
-        search_col = "order_id" if column_case == "lower" else (
-            "ORDER_ID" if column_case == "UPPER" else "oRdEr_Id"
+        search_col = (
+            "order_id"
+            if column_case == "lower"
+            else ("ORDER_ID" if column_case == "UPPER" else "oRdEr_Id")
         )
 
         search_term = f"{search_table}.{search_col}"
-        results = analyzer.analyze_column_lineage(column=search_term)
+        results = analyzer.analyze_queries(level="column", column=search_term)
 
         assert len(results) == 1
         # Should find the column regardless of case differences
@@ -468,7 +498,7 @@ class TestAnalyzerEdgeCases:
 
         with pytest.raises(ParseError):
             analyzer = LineageAnalyzer(invalid_sql, dialect="spark")
-            analyzer.analyze_column_lineage()
+            analyzer.analyze_queries(level="column")
 
     def test_empty_sql_raises_error(self):
         """Test that empty SQL raises an error."""
@@ -478,7 +508,7 @@ class TestAnalyzerEdgeCases:
 
         with pytest.raises((ParseError, ValueError)):
             analyzer = LineageAnalyzer(empty_sql, dialect="spark")
-            analyzer.analyze_column_lineage()
+            analyzer.analyze_queries(level="column")
 
     def test_different_dialects(self):
         """Test analyzer works with different SQL dialects."""
@@ -486,8 +516,9 @@ class TestAnalyzerEdgeCases:
 
         for dialect in ["postgres", "mysql", "snowflake", "bigquery"]:
             analyzer = LineageAnalyzer(sql, dialect=dialect)
-            results = analyzer.analyze_column_lineage()
-            assert len(results) >= 1
+            results = analyzer.analyze_queries(level="column")
+            assert len(results) == 1
+            assert len(results[0].lineage_items) >= 1
 
     def test_create_table_as_select(self):
         """Test CTAS (CREATE TABLE AS SELECT) statement."""
@@ -502,12 +533,13 @@ class TestAnalyzerEdgeCases:
         """
 
         analyzer = LineageAnalyzer(sql, dialect="spark")
-        results = analyzer.analyze_column_lineage()
+        results = analyzer.analyze_queries(level="column")
 
         # Should find lineage for the created columns
-        assert len(results) >= 1
+        assert len(results) == 1
+        assert len(results[0].lineage_items) >= 1
         # Verify source columns are traced
-        column_names = [r.output_column for r in results]
+        column_names = [item.output_name for item in results[0].lineage_items]
         assert any("customer_id" in col.lower() for col in column_names)
 
     def test_insert_into_select(self):
@@ -522,10 +554,11 @@ class TestAnalyzerEdgeCases:
         """
 
         analyzer = LineageAnalyzer(sql, dialect="spark")
-        results = analyzer.analyze_column_lineage()
+        results = analyzer.analyze_queries(level="column")
 
         # Should find lineage for inserted columns
-        assert len(results) >= 1
+        assert len(results) == 1
+        assert len(results[0].lineage_items) >= 1
 
     def test_table_lineage_basic(self):
         """Test basic table-level lineage."""
@@ -538,12 +571,13 @@ class TestAnalyzerEdgeCases:
         """
 
         analyzer = LineageAnalyzer(sql, dialect="spark")
-        result = analyzer.analyze_table_lineage()
+        results = analyzer.analyze_queries(level="table")
 
-        assert result.source_tables is not None
-        assert len(result.source_tables) >= 2
+        assert len(results) == 1
+        assert len(results[0].lineage_items) >= 2
         # Should include both customers and orders
-        source_tables_lower = [t.lower() for t in result.source_tables]
+        source_tables = [item.source_name for item in results[0].lineage_items]
+        source_tables_lower = [t.lower() for t in source_tables]
         assert any("customers" in t for t in source_tables_lower)
         assert any("orders" in t for t in source_tables_lower)
 
@@ -563,10 +597,10 @@ class TestAnalyzerEdgeCases:
         """
 
         analyzer = LineageAnalyzer(sql, dialect="spark")
-        result = analyzer.analyze_table_lineage()
+        results = analyzer.analyze_queries(level="table")
 
-        assert result.source_tables is not None
-        assert len(result.source_tables) >= 1
+        assert len(results) == 1
+        assert len(results[0].lineage_items) >= 1
 
     def test_complex_cte_chain(self):
         """Test complex CTE chains."""
@@ -586,10 +620,11 @@ class TestAnalyzerEdgeCases:
         """
 
         analyzer = LineageAnalyzer(sql, dialect="spark")
-        results = analyzer.analyze_column_lineage()
+        results = analyzer.analyze_queries(level="column")
 
         # Should successfully analyze the CTE chain
-        assert len(results) >= 1
+        assert len(results) == 1
+        assert len(results[0].lineage_items) >= 1
 
     def test_union_query(self):
         """Test UNION query."""
@@ -600,10 +635,11 @@ class TestAnalyzerEdgeCases:
         """
 
         analyzer = LineageAnalyzer(sql, dialect="spark")
-        results = analyzer.analyze_column_lineage()
+        results = analyzer.analyze_queries(level="column")
 
         # Should find lineage for both sources
-        assert len(results) >= 1
+        assert len(results) == 1
+        assert len(results[0].lineage_items) >= 1
 
     def test_window_functions(self):
         """Test queries with window functions."""
@@ -617,11 +653,12 @@ class TestAnalyzerEdgeCases:
         """
 
         analyzer = LineageAnalyzer(sql, dialect="spark")
-        results = analyzer.analyze_column_lineage()
+        results = analyzer.analyze_queries(level="column")
 
-        assert len(results) >= 1
+        assert len(results) == 1
+        assert len(results[0].lineage_items) >= 1
         # Should include window function columns
-        column_names = [r.output_column for r in results]
+        column_names = [item.output_name for item in results[0].lineage_items]
         assert any("customer_id" in col.lower() for col in column_names)
 
     def test_case_expressions(self):
@@ -638,9 +675,10 @@ class TestAnalyzerEdgeCases:
         """
 
         analyzer = LineageAnalyzer(sql, dialect="spark")
-        results = analyzer.analyze_column_lineage()
+        results = analyzer.analyze_queries(level="column")
 
-        assert len(results) >= 1
+        assert len(results) == 1
+        assert len(results[0].lineage_items) >= 1
 
     def test_aggregate_functions(self):
         """Test various aggregate functions."""
@@ -657,9 +695,12 @@ class TestAnalyzerEdgeCases:
         """
 
         analyzer = LineageAnalyzer(sql, dialect="spark")
-        results = analyzer.analyze_column_lineage()
+        results = analyzer.analyze_queries(level="column")
 
-        assert len(results) >= 2  # At least customer_id and one aggregate
+        assert len(results) == 1
+        assert (
+            len(results[0].lineage_items) >= 2
+        )  # At least customer_id and one aggregate
 
     def test_lateral_view(self):
         """Test LATERAL VIEW (Spark-specific)."""
@@ -672,9 +713,10 @@ class TestAnalyzerEdgeCases:
         """
 
         analyzer = LineageAnalyzer(sql, dialect="spark")
-        results = analyzer.analyze_column_lineage()
+        results = analyzer.analyze_queries(level="column")
 
-        assert len(results) >= 1
+        assert len(results) == 1
+        assert len(results[0].lineage_items) >= 1
 
     def test_qualified_table_names(self):
         """Test queries with database-qualified table names."""
@@ -687,9 +729,10 @@ class TestAnalyzerEdgeCases:
         """
 
         analyzer = LineageAnalyzer(sql, dialect="spark")
-        results = analyzer.analyze_column_lineage()
+        results = analyzer.analyze_queries(level="column")
 
-        assert len(results) >= 1
+        assert len(results) == 1
+        assert len(results[0].lineage_items) >= 1
 
     def test_reverse_lineage_nonexistent_column(self):
         """Test reverse lineage with nonexistent source column raises error."""
@@ -699,7 +742,9 @@ class TestAnalyzerEdgeCases:
 
         # Should raise ValueError for nonexistent column
         with pytest.raises(ValueError) as exc_info:
-            analyzer.analyze_reverse_lineage("nonexistent_table.nonexistent_column")
+            analyzer.analyze_queries(
+                level="column", source_column="nonexistent_table.nonexistent_column"
+            )
 
         assert "not found" in str(exc_info.value).lower()
 
@@ -710,7 +755,7 @@ class TestAnalyzerEdgeCases:
         analyzer = LineageAnalyzer(sql, dialect="spark")
 
         with pytest.raises(ValueError) as exc_info:
-            analyzer.analyze_column_lineage(column="nonexistent_column")
+            analyzer.analyze_queries(level="column", column="nonexistent_column")
 
         assert "not found" in str(exc_info.value).lower()
 
@@ -726,9 +771,10 @@ class TestAnalyzerEdgeCases:
         """
 
         analyzer = LineageAnalyzer(sql, dialect="spark")
-        results = analyzer.analyze_column_lineage()
+        results = analyzer.analyze_queries(level="column")
 
-        assert len(results) >= 2
+        assert len(results) == 1
+        assert len(results[0].lineage_items) >= 2
 
     def test_multiple_joins(self):
         """Test query with multiple joins."""
@@ -746,9 +792,10 @@ class TestAnalyzerEdgeCases:
         """
 
         analyzer = LineageAnalyzer(sql, dialect="spark")
-        results = analyzer.analyze_column_lineage()
+        results = analyzer.analyze_queries(level="column")
 
-        assert len(results) >= 4
+        assert len(results) == 1
+        assert len(results[0].lineage_items) >= 4
 
     def test_nested_subqueries(self):
         """Test deeply nested subqueries."""
@@ -767,9 +814,10 @@ class TestAnalyzerEdgeCases:
         """
 
         analyzer = LineageAnalyzer(sql, dialect="spark")
-        results = analyzer.analyze_column_lineage()
+        results = analyzer.analyze_queries(level="column")
 
-        assert len(results) >= 1
+        assert len(results) == 1
+        assert len(results[0].lineage_items) >= 1
 
     def test_column_aliases_with_special_chars(self):
         """Test column aliases with special characters."""
@@ -783,9 +831,10 @@ class TestAnalyzerEdgeCases:
         """
 
         analyzer = LineageAnalyzer(sql, dialect="postgres")
-        results = analyzer.analyze_column_lineage()
+        results = analyzer.analyze_queries(level="column")
 
-        assert len(results) >= 1
+        assert len(results) == 1
+        assert len(results[0].lineage_items) >= 1
 
     def test_distinct_query(self):
         """Test query with DISTINCT."""
@@ -797,9 +846,10 @@ class TestAnalyzerEdgeCases:
         """
 
         analyzer = LineageAnalyzer(sql, dialect="spark")
-        results = analyzer.analyze_column_lineage()
+        results = analyzer.analyze_queries(level="column")
 
-        assert len(results) >= 2
+        assert len(results) == 1
+        assert len(results[0].lineage_items) >= 2
 
     def test_order_by_limit(self):
         """Test query with ORDER BY and LIMIT."""
@@ -814,9 +864,10 @@ class TestAnalyzerEdgeCases:
         """
 
         analyzer = LineageAnalyzer(sql, dialect="spark")
-        results = analyzer.analyze_column_lineage()
+        results = analyzer.analyze_queries(level="column")
 
-        assert len(results) >= 1
+        assert len(results) == 1
+        assert len(results[0].lineage_items) >= 1
 
     def test_having_clause(self):
         """Test query with HAVING clause."""
@@ -831,9 +882,10 @@ class TestAnalyzerEdgeCases:
         """
 
         analyzer = LineageAnalyzer(sql, dialect="spark")
-        results = analyzer.analyze_column_lineage()
+        results = analyzer.analyze_queries(level="column")
 
-        assert len(results) >= 1
+        assert len(results) == 1
+        assert len(results[0].lineage_items) >= 1
 
     def test_cross_join(self):
         """Test CROSS JOIN."""
@@ -846,9 +898,10 @@ class TestAnalyzerEdgeCases:
         """
 
         analyzer = LineageAnalyzer(sql, dialect="spark")
-        results = analyzer.analyze_column_lineage()
+        results = analyzer.analyze_queries(level="column")
 
-        assert len(results) >= 2
+        assert len(results) == 1
+        assert len(results[0].lineage_items) >= 2
 
     def test_except_query(self):
         """Test EXCEPT/MINUS query."""
@@ -859,9 +912,10 @@ class TestAnalyzerEdgeCases:
         """
 
         analyzer = LineageAnalyzer(sql, dialect="spark")
-        results = analyzer.analyze_column_lineage()
+        results = analyzer.analyze_queries(level="column")
 
-        assert len(results) >= 1
+        assert len(results) == 1
+        assert len(results[0].lineage_items) >= 1
 
     def test_intersect_query(self):
         """Test INTERSECT query."""
@@ -872,9 +926,10 @@ class TestAnalyzerEdgeCases:
         """
 
         analyzer = LineageAnalyzer(sql, dialect="spark")
-        results = analyzer.analyze_column_lineage()
+        results = analyzer.analyze_queries(level="column")
 
-        assert len(results) >= 1
+        assert len(results) == 1
+        assert len(results[0].lineage_items) >= 1
 
 
 class TestMultiQueryParsing:
@@ -913,7 +968,9 @@ class TestMultiQueryParsing:
         analyzer = LineageAnalyzer(multi_query_sql, dialect="spark")
 
         assert len(analyzer.expressions) == 3
-        assert analyzer.expr is not None  # First expression stored for backward compatibility
+        assert (
+            analyzer.expr is not None
+        )  # First expression stored for backward compatibility
 
     def test_parse_single_statement(self, single_query_sql):
         """Test backward compatibility with single statement."""
@@ -925,31 +982,34 @@ class TestMultiQueryParsing:
     def test_analyze_all_queries(self, multi_query_sql):
         """Test analyzing all queries returns results for each query."""
         analyzer = LineageAnalyzer(multi_query_sql, dialect="spark")
-        results = analyzer.analyze_all_queries()
+        results = analyzer.analyze_queries(level="column")
 
         assert len(results) == 3
-        from sqlglider.lineage.analyzer import QueryLineage
-        assert all(isinstance(r, QueryLineage) for r in results)
+        from sqlglider.lineage.analyzer import QueryLineageResult
+
+        assert all(isinstance(r, QueryLineageResult) for r in results)
 
         # Check query indices
-        assert results[0].query_index == 0
-        assert results[1].query_index == 1
-        assert results[2].query_index == 2
+        assert results[0].metadata.query_index == 0
+        assert results[1].metadata.query_index == 1
+        assert results[2].metadata.query_index == 2
 
         # Check query previews exist
-        assert "SELECT" in results[0].query_preview
-        assert "SELECT" in results[1].query_preview
-        assert "INSERT" in results[2].query_preview
+        assert "SELECT" in results[0].metadata.query_preview
+        assert "SELECT" in results[1].metadata.query_preview
+        assert "INSERT" in results[2].metadata.query_preview
 
         # Check that each has column lineage
-        assert len(results[0].column_lineage) > 0
-        assert len(results[1].column_lineage) > 0
-        assert len(results[2].column_lineage) > 0
+        assert len(results[0].lineage_items) > 0
+        assert len(results[1].lineage_items) > 0
+        assert len(results[2].lineage_items) > 0
 
     def test_analyze_all_queries_specific_column(self, multi_query_sql):
         """Test analyzing specific column across all queries."""
         analyzer = LineageAnalyzer(multi_query_sql, dialect="spark")
-        results = analyzer.analyze_all_queries(column="customers.customer_id")
+        results = analyzer.analyze_queries(
+            level="column", column="customers.customer_id"
+        )
 
         # Should get only queries that have this specific column
         # Query 0: customers.customer_id exists
@@ -957,20 +1017,22 @@ class TestMultiQueryParsing:
         # Query 2: customer_orders.customer_id (different qualified name)
         # So we should get 1 result
         assert len(results) == 1
-        assert results[0].query_index == 0
+        assert results[0].metadata.query_index == 0
 
         # Should only have customer_id lineage
-        assert len(results[0].column_lineage) == 1
-        assert "customers.customer_id" in results[0].column_lineage[0].output_column
+        assert len(results[0].lineage_items) == 1
+        assert "customers.customer_id" in results[0].lineage_items[0].output_name
 
     def test_backward_compatibility_single_query(self, single_query_sql):
-        """Test that single query still works with old analyze_column_lineage method."""
+        """Test that single query still works with analyze_queries method."""
         analyzer = LineageAnalyzer(single_query_sql, dialect="spark")
-        results = analyzer.analyze_column_lineage()
+        results = analyzer.analyze_queries(level="column")
 
-        assert len(results) == 2  # customer_id, customer_name
-        assert any("customer_id" in r.output_column for r in results)
-        assert any("customer_name" in r.output_column for r in results)
+        assert len(results) == 1  # 1 query
+        assert len(results[0].lineage_items) == 2  # customer_id, customer_name
+        output_names = [item.output_name for item in results[0].lineage_items]
+        assert any("customer_id" in name for name in output_names)
+        assert any("customer_name" in name for name in output_names)
 
 
 class TestTableFiltering:
@@ -993,47 +1055,60 @@ class TestTableFiltering:
     def test_filter_by_table(self, multi_query_different_tables):
         """Test filtering to only queries that use a specific table."""
         analyzer = LineageAnalyzer(multi_query_different_tables, dialect="spark")
-        results = analyzer.analyze_all_queries(table_filter="customers")
+        results = analyzer.analyze_queries(level="column", table_filter="customers")
 
         # Should only get the query that references customers table
         assert len(results) == 1
-        assert results[0].query_index == 1
-        assert "customer" in results[0].query_preview.lower()
+        assert results[0].metadata.query_index == 1
+        assert "customer" in results[0].metadata.query_preview.lower()
 
     def test_filter_by_table_multiple_matches(self, multi_query_different_tables):
         """Test filtering when multiple queries reference the table."""
         analyzer = LineageAnalyzer(multi_query_different_tables, dialect="spark")
-        results = analyzer.analyze_all_queries(table_filter="orders")
+        results = analyzer.analyze_queries(level="column", table_filter="orders")
 
         # Should only get the query that references orders table
         assert len(results) == 1
-        assert results[0].query_index == 2
+        assert results[0].metadata.query_index == 2
 
     def test_filter_by_table_case_insensitive(self, multi_query_different_tables):
         """Test that table filtering is case-insensitive."""
         analyzer = LineageAnalyzer(multi_query_different_tables, dialect="spark")
-        results_lower = analyzer.analyze_all_queries(table_filter="products")
-        results_upper = analyzer.analyze_all_queries(table_filter="PRODUCTS")
-        results_mixed = analyzer.analyze_all_queries(table_filter="PrOdUcTs")
+        results_lower = analyzer.analyze_queries(
+            level="column", table_filter="products"
+        )
+        results_upper = analyzer.analyze_queries(
+            level="column", table_filter="PRODUCTS"
+        )
+        results_mixed = analyzer.analyze_queries(
+            level="column", table_filter="PrOdUcTs"
+        )
 
         assert len(results_lower) == len(results_upper) == len(results_mixed) == 1
-        assert results_lower[0].query_index == results_upper[0].query_index == results_mixed[0].query_index == 0
+        assert (
+            results_lower[0].metadata.query_index
+            == results_upper[0].metadata.query_index
+            == results_mixed[0].metadata.query_index
+            == 0
+        )
 
     def test_filter_no_matches(self, multi_query_different_tables):
         """Test filtering with table that doesn't exist."""
         analyzer = LineageAnalyzer(multi_query_different_tables, dialect="spark")
-        results = analyzer.analyze_all_queries(table_filter="nonexistent_table")
+        results = analyzer.analyze_queries(
+            level="column", table_filter="nonexistent_table"
+        )
 
         assert len(results) == 0
 
     def test_filter_partial_match(self, multi_query_different_tables):
         """Test filtering with partial table name."""
         analyzer = LineageAnalyzer(multi_query_different_tables, dialect="spark")
-        results = analyzer.analyze_all_queries(table_filter="cust")
+        results = analyzer.analyze_queries(level="column", table_filter="cust")
 
         # Should match "customers" table
         assert len(results) == 1
-        assert results[0].query_index == 1
+        assert results[0].metadata.query_index == 1
 
 
 class TestMultiQueryEdgeCases:
@@ -1072,29 +1147,35 @@ class TestMultiQueryReverseLineage:
     def test_reverse_lineage_all_queries(self, multi_query_sql):
         """Test reverse lineage across all queries."""
         analyzer = LineageAnalyzer(multi_query_sql, dialect="spark")
-        results = analyzer.analyze_all_queries_reverse("customers.customer_id")
+        results = analyzer.analyze_queries(
+            level="column", source_column="customers.customer_id"
+        )
 
         # Should get results from all 3 queries
         assert len(results) == 3
-        from sqlglider.lineage.analyzer import QueryLineage
-        assert all(isinstance(r, QueryLineage) for r in results)
+        from sqlglider.lineage.analyzer import QueryLineageResult
+
+        assert all(isinstance(r, QueryLineageResult) for r in results)
 
     def test_reverse_lineage_with_table_filter(self, multi_query_sql):
         """Test reverse lineage with table filter."""
         analyzer = LineageAnalyzer(multi_query_sql, dialect="spark")
-        results = analyzer.analyze_all_queries_reverse("customers.customer_id", table_filter="orders")
+        results = analyzer.analyze_queries(
+            level="column", source_column="customers.customer_id", table_filter="orders"
+        )
 
         # Should only get queries referencing orders table
         assert len(results) == 1
-        assert results[0].query_index == 1
+        assert results[0].metadata.query_index == 1
 
     def test_reverse_lineage_nonexistent_column(self, multi_query_sql):
         """Test reverse lineage with column that doesn't exist."""
         analyzer = LineageAnalyzer(multi_query_sql, dialect="spark")
-        results = analyzer.analyze_all_queries_reverse("nonexistent.column")
 
-        # Should get empty results
-        assert len(results) == 0
+        with pytest.raises(ValueError) as exc_info:
+            analyzer.analyze_queries(level="column", source_column="nonexistent.column")
+
+        assert "not found" in str(exc_info.value).lower()
 
     def test_reverse_lineage_base_table_column(self):
         """Test reverse lineage with base table columns (not derived)."""
@@ -1103,23 +1184,29 @@ class TestMultiQueryReverseLineage:
         SELECT customer_id FROM customers;
         """
         analyzer = LineageAnalyzer(sql, dialect="spark")
-        results = analyzer.analyze_all_queries_reverse("orders.order_total")
+        results = analyzer.analyze_queries(
+            level="column", source_column="orders.order_total"
+        )
 
         # Should find the column in query 0
         assert len(results) == 1
-        assert results[0].query_index == 0
+        assert results[0].metadata.query_index == 0
         # Base table columns show themselves as affected outputs
-        assert "orders.order_total" in results[0].column_lineage[0].source_columns
+        sources = [item.source_name for item in results[0].lineage_items]
+        assert "orders.order_total" in sources
 
     def test_reverse_lineage_single_query_base_column(self):
         """Test single-query reverse lineage with base table column."""
         sql = "SELECT order_id, order_total, customer_id FROM orders"
         analyzer = LineageAnalyzer(sql, dialect="spark")
-        result = analyzer.analyze_reverse_lineage("orders.order_total")
+        results = analyzer.analyze_queries(
+            level="column", source_column="orders.order_total"
+        )
 
-        assert len(result) == 1
-        assert result[0].output_column == "orders.order_total"
-        assert "orders.order_total" in result[0].source_columns
+        assert len(results) == 1
+        assert len(results[0].lineage_items) == 1
+        assert results[0].lineage_items[0].output_name == "orders.order_total"
+        assert "orders.order_total" in results[0].lineage_items[0].source_name
 
 
 class TestMultiQueryTableLineage:
@@ -1137,24 +1224,29 @@ class TestMultiQueryTableLineage:
     def test_table_lineage_all_queries(self, multi_query_sql):
         """Test table lineage across all queries."""
         analyzer = LineageAnalyzer(multi_query_sql, dialect="spark")
-        results = analyzer.analyze_all_queries_table_lineage()
+        results = analyzer.analyze_queries(level="table")
 
         # Should get results from all 3 queries
         assert len(results) == 3
-        from sqlglider.lineage.analyzer import QueryTableLineage
-        assert all(isinstance(r, QueryTableLineage) for r in results)
+        from sqlglider.lineage.analyzer import QueryLineageResult
+
+        assert all(isinstance(r, QueryLineageResult) for r in results)
 
         # Check that tables are correctly identified
-        assert "customers" in results[0].table_lineage.source_tables
-        assert "orders" in results[1].table_lineage.source_tables
-        assert "products" in results[1].table_lineage.source_tables
-        assert "inventory" in results[2].table_lineage.source_tables
+        sources_q0 = [item.source_name for item in results[0].lineage_items]
+        sources_q1 = [item.source_name for item in results[1].lineage_items]
+        sources_q2 = [item.source_name for item in results[2].lineage_items]
+
+        assert "customers" in sources_q0
+        assert "orders" in sources_q1
+        assert "products" in sources_q1
+        assert "inventory" in sources_q2
 
     def test_table_lineage_with_filter(self, multi_query_sql):
         """Test table lineage with table filter."""
         analyzer = LineageAnalyzer(multi_query_sql, dialect="spark")
-        results = analyzer.analyze_all_queries_table_lineage(table_filter="products")
+        results = analyzer.analyze_queries(level="table", table_filter="products")
 
         # Should only get query with products table
         assert len(results) == 1
-        assert results[0].query_index == 1
+        assert results[0].metadata.query_index == 1

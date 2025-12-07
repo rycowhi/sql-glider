@@ -318,8 +318,7 @@ dialect = "trino"
         """Test handling of permission errors when reading config."""
         # This test is platform-specific and may not work on all systems
         # We'll create a test that simulates the error handling
-        with TemporaryDirectory() as tmpdir:
-            tmppath = Path(tmpdir)
+        with TemporaryDirectory():
             # We can't easily simulate permission errors in a cross-platform way
             # Just ensure the error handling path exists
             pass  # Skip this test for now
@@ -334,9 +333,7 @@ dialect = "trino"
             ("snowflake", "column", "csv"),
         ],
     )
-    def test_load_config_various_combinations(
-        self, dialect, level, output_format
-    ):
+    def test_load_config_various_combinations(self, dialect, level, output_format):
         """Test loading various combinations of config values."""
         with TemporaryDirectory() as tmpdir:
             tmppath = Path(tmpdir)

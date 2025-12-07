@@ -62,9 +62,7 @@ class TestLineageCommand:
     def test_lineage_with_column_option(self, sample_sql_file):
         """Test lineage with specific column."""
         # First analyze all columns to see what's available
-        result = runner.invoke(
-            app, ["lineage", str(sample_sql_file)]
-        )
+        result = runner.invoke(app, ["lineage", str(sample_sql_file)])
 
         # Just verify the command runs without specifying a specific column name
         # as the actual column names depend on how SQLGlot parses the query
@@ -92,7 +90,7 @@ class TestLineageCommand:
 
         assert result.exit_code == 0
         assert "{" in result.stdout
-        assert "columns" in result.stdout
+        assert "queries" in result.stdout
 
     def test_lineage_csv_format(self, sample_sql_file):
         """Test CSV output format."""
@@ -101,7 +99,7 @@ class TestLineageCommand:
         )
 
         assert result.exit_code == 0
-        assert "output_column,source_table,source_column" in result.stdout
+        assert "query_index,output_column,source_column" in result.stdout
 
     def test_lineage_text_format(self, sample_sql_file):
         """Test text output format (default)."""
@@ -159,9 +157,7 @@ class TestLineageCommand:
 
     def test_lineage_file_not_found(self):
         """Test error handling for non-existent file."""
-        result = runner.invoke(
-            app, ["lineage", "/path/that/does/not/exist.sql"]
-        )
+        result = runner.invoke(app, ["lineage", "/path/that/does/not/exist.sql"])
 
         # Typer returns exit code 2 for missing files
         assert result.exit_code in [1, 2]
@@ -188,9 +184,7 @@ class TestLineageCommand:
 
         assert result.exit_code == 1
 
-    def test_lineage_column_and_source_column_mutual_exclusion(
-        self, sample_sql_file
-    ):
+    def test_lineage_column_and_source_column_mutual_exclusion(self, sample_sql_file):
         """Test that --column and --source-column cannot be used together."""
         result = runner.invoke(
             app,
@@ -251,7 +245,7 @@ class TestLineageCommand:
 
             content = output_file.read_text(encoding="utf-8")
             parsed = json.loads(content)
-            assert "columns" in parsed
+            assert "queries" in parsed
         finally:
             output_file.unlink()
 
@@ -277,7 +271,7 @@ class TestLineageCommand:
 
             # Verify CSV format
             content = output_file.read_text(encoding="utf-8")
-            assert "output_column,source_table,source_column" in content
+            assert "query_index,output_column,source_column" in content
         finally:
             output_file.unlink()
 
@@ -392,7 +386,7 @@ output_format = "json"
                 assert result.exit_code == 0
                 # Should use JSON format from config
                 assert "{" in result.stdout
-                assert "columns" in result.stdout
+                assert "queries" in result.stdout
             finally:
                 os.chdir(original_cwd)
 

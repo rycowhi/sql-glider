@@ -160,9 +160,7 @@ SELECT * FROM orders;"""
     def test_read_large_sql_file(self):
         """Test reading a large SQL file."""
         # Generate a large SQL statement
-        large_sql = "SELECT\n" + ",\n".join(
-            [f"    column_{i}" for i in range(1000)]
-        )
+        large_sql = "SELECT\n" + ",\n".join([f"    column_{i}" for i in range(1000)])
         large_sql += "\nFROM large_table;"
 
         with NamedTemporaryFile(mode="w", delete=False, suffix=".sql") as f:
