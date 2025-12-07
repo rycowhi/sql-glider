@@ -433,6 +433,63 @@ src/sqlglider/
     └── file_utils.py         # File I/O utilities
 ```
 
+## Publishing
+
+SQL Glider is configured for publishing to both TestPyPI and PyPI using `uv`.
+
+### Building the Package
+
+```bash
+# Build the distribution files (wheel and sdist)
+uv build
+```
+
+This creates distribution files in the `dist/` directory.
+
+### Publishing to TestPyPI
+
+Always test your release on TestPyPI first:
+
+```bash
+# Publish to TestPyPI
+uv publish --index testpypi --token <YOUR_TESTPYPI_TOKEN>
+
+# Test installation from TestPyPI
+uv pip install --index-url https://test.pypi.org/simple/ sql-glider
+```
+
+### Publishing to PyPI
+
+Once verified on TestPyPI, publish to production:
+
+```bash
+# Publish to PyPI
+uv publish --index pypi --token <YOUR_PYPI_TOKEN>
+```
+
+### Token Setup
+
+You'll need API tokens from both registries:
+
+1. **TestPyPI Token:** Create at https://test.pypi.org/manage/account/token/
+2. **PyPI Token:** Create at https://pypi.org/manage/account/token/
+
+**Option 1: Pass token directly (shown above)**
+
+**Option 2: Environment variable**
+```bash
+export UV_PUBLISH_TOKEN=pypi-...
+uv publish --index pypi
+```
+
+**Option 3: Store in `.env` file (not committed to git)**
+```bash
+# .env
+UV_PUBLISH_TOKEN=pypi-...
+```
+
+**Security Note:** Never commit API tokens to version control. The `.gitignore` file should include `.env`.
+
 ## Dependencies
 
 - **sqlglot[rs]:** SQL parser and lineage analysis library with Rust extensions
