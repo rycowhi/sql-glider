@@ -141,6 +141,60 @@ class Manifest(BaseModel):
         return cls(entries=entries)
 
 
+class LineageNode(BaseModel):
+    """
+    A node in lineage query results with additional context.
+
+    Extends GraphNode fields with query-specific information like hop distance
+    and the output column being queried.
+    """
+
+    # Fields from GraphNode
+    identifier: str = Field(
+        ..., description="Unique node identifier (fully-qualified column name)"
+    )
+    file_path: str = Field(
+        ..., description="Source SQL file path where first encountered"
+    )
+    query_index: int = Field(..., description="Index of query within the file")
+    schema_name: Optional[str] = Field(None, description="Schema name (if present)")
+    table: Optional[str] = Field(None, description="Table name")
+    column: Optional[str] = Field(None, description="Column name")
+
+    # Query result fields
+    hops: int = Field(..., description="Number of hops from the queried column")
+    output_column: str = Field(..., description="The column that was queried")
+
+    @classmethod
+    def from_graph_node(
+        cls,
+        node: "GraphNode",
+        hops: int,
+        output_column: str,
+    ) -> "LineageNode":
+        """
+        Create a LineageNode from a GraphNode with additional context.
+
+        Args:
+            node: The underlying GraphNode
+            hops: Number of hops from the query column
+            output_column: The column that was queried
+
+        Returns:
+            LineageNode with all GraphNode fields plus hops and output_column
+        """
+        return cls(
+            identifier=node.identifier,
+            file_path=node.file_path,
+            query_index=node.query_index,
+            schema_name=node.schema_name,
+            table=node.table,
+            column=node.column,
+            hops=hops,
+            output_column=output_column,
+        )
+
+
 class GraphMetadata(BaseModel):
     """Metadata about the lineage graph."""
 

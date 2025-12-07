@@ -529,12 +529,16 @@ def _format_query_result_text(result) -> None:
     table = Table(title=f"{direction_label} for '{result.query_column}'")
     table.add_column("Column", style="cyan")
     table.add_column("Table", style="green")
+    table.add_column("Hops", style="yellow", justify="right")
+    table.add_column("Output Column", style="magenta")
     table.add_column("File", style="dim")
 
     for node in result.related_columns:
         table.add_row(
             node.column or node.identifier,
             node.table or "",
+            str(node.hops),
+            node.output_column,
             Path(node.file_path).name if node.file_path else "",
         )
 
@@ -560,11 +564,12 @@ def _format_query_result_json(result) -> None:
 
 def _format_query_result_csv(result) -> None:
     """Format query result as CSV."""
-    print("identifier,table,column,file_path,query_index")
+    print("identifier,table,column,hops,output_column,file_path,query_index")
     for node in result.related_columns:
         file_path = node.file_path.replace('"', '""') if node.file_path else ""
         print(
-            f'"{node.identifier}","{node.table or ""}","{node.column or ""}","{file_path}",{node.query_index}'
+            f'"{node.identifier}","{node.table or ""}","{node.column or ""}",'
+            f'{node.hops},"{node.output_column}","{file_path}",{node.query_index}'
         )
 
 

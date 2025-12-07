@@ -1,11 +1,11 @@
 """Graph query functionality for upstream/downstream analysis."""
 
 from pathlib import Path
-from typing import List, Optional, Set
+from typing import Dict, List, Optional
 
 import rustworkx as rx
 
-from sqlglider.graph.models import GraphNode, LineageGraph
+from sqlglider.graph.models import GraphNode, LineageGraph, LineageNode
 from sqlglider.graph.serialization import load_graph, to_rustworkx
 
 
@@ -16,7 +16,7 @@ class LineageQueryResult:
         self,
         query_column: str,
         direction: str,  # "upstream" or "downstream"
-        related_columns: List[GraphNode],
+        related_columns: List[LineageNode],
     ):
         """
         Initialize query result.
@@ -24,7 +24,7 @@ class LineageQueryResult:
         Args:
             query_column: The column that was queried
             direction: Query direction ("upstream" or "downstream")
-            related_columns: List of related column nodes
+            related_columns: List of related LineageNode objects with hop info
         """
         self.query_column = query_column
         self.direction = direction
@@ -52,6 +52,16 @@ class GraphQuerier:
         self.graph = graph
         self.rx_graph, self.node_map = to_rustworkx(graph)
         self._reverse_map = {v: k for k, v in self.node_map.items()}
+        # Create reversed graph for upstream queries (lazy initialization)
+        self._rx_graph_reversed: Optional[rx.PyDiGraph] = None
+
+    @property
+    def rx_graph_reversed(self) -> rx.PyDiGraph:
+        """Get reversed graph for upstream traversal (created lazily)."""
+        if self._rx_graph_reversed is None:
+            self._rx_graph_reversed = self.rx_graph.copy()
+            self._rx_graph_reversed.reverse()
+        return self._rx_graph_reversed
 
     @classmethod
     def from_file(cls, graph_path: Path) -> "GraphQuerier":
@@ -74,14 +84,14 @@ class GraphQuerier:
         """
         Find all upstream (source) columns for a given column.
 
-        Uses rustworkx.ancestors() to find all nodes that have a path
-        leading to the specified column.
+        Uses dijkstra_shortest_path_lengths on a reversed graph to find all
+        nodes that have a path leading to the specified column, with hop counts.
 
         Args:
             column: Column identifier to analyze
 
         Returns:
-            LineageQueryResult with upstream columns
+            LineageQueryResult with upstream columns including hop distances
 
         Raises:
             ValueError: If column not found in graph
@@ -93,12 +103,24 @@ class GraphQuerier:
 
         node_idx = self.node_map[matched_column]
 
-        # Get all ancestors (upstream nodes)
-        ancestor_indices: Set[int] = rx.ancestors(self.rx_graph, node_idx)
+        # Use dijkstra on reversed graph to get distances to all ancestors
+        # Each edge has weight 1.0 for hop counting
+        distances: Dict[int, float] = rx.dijkstra_shortest_path_lengths(
+            self.rx_graph_reversed,
+            node_idx,
+            edge_cost_fn=lambda _: 1.0,
+        )
 
-        # Convert to GraphNode objects, sorted by identifier
+        # Convert to LineageNode objects, sorted by identifier
         upstream_columns = sorted(
-            [GraphNode(**self.rx_graph[idx]) for idx in ancestor_indices],
+            [
+                LineageNode.from_graph_node(
+                    GraphNode(**self.rx_graph[idx]),
+                    hops=int(hops),
+                    output_column=matched_column,
+                )
+                for idx, hops in distances.items()
+            ],
             key=lambda n: n.identifier.lower(),
         )
 
@@ -112,14 +134,14 @@ class GraphQuerier:
         """
         Find all downstream (affected) columns for a given column.
 
-        Uses rustworkx.descendants() to find all nodes that have a path
-        from the specified column.
+        Uses dijkstra_shortest_path_lengths to find all nodes that have a path
+        from the specified column, with hop counts.
 
         Args:
             column: Column identifier to analyze
 
         Returns:
-            LineageQueryResult with downstream columns
+            LineageQueryResult with downstream columns including hop distances
 
         Raises:
             ValueError: If column not found in graph
@@ -131,12 +153,24 @@ class GraphQuerier:
 
         node_idx = self.node_map[matched_column]
 
-        # Get all descendants (downstream nodes)
-        descendant_indices: Set[int] = rx.descendants(self.rx_graph, node_idx)
+        # Use dijkstra on original graph to get distances to all descendants
+        # Each edge has weight 1.0 for hop counting
+        distances: Dict[int, float] = rx.dijkstra_shortest_path_lengths(
+            self.rx_graph,
+            node_idx,
+            edge_cost_fn=lambda _: 1.0,
+        )
 
-        # Convert to GraphNode objects, sorted by identifier
+        # Convert to LineageNode objects, sorted by identifier
         downstream_columns = sorted(
-            [GraphNode(**self.rx_graph[idx]) for idx in descendant_indices],
+            [
+                LineageNode.from_graph_node(
+                    GraphNode(**self.rx_graph[idx]),
+                    hops=int(hops),
+                    output_column=matched_column,
+                )
+                for idx, hops in distances.items()
+            ],
             key=lambda n: n.identifier.lower(),
         )
 

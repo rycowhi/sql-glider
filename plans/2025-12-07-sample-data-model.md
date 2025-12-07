@@ -14,7 +14,7 @@ Create a fully modeled SQL domain with 22 DML statements (plus 14 DDL files) tha
 
 ```
 TIER 1: RAW                TIER 2: STAGING           TIER 3: BUSINESS          TIER 4: PRESENTATION
-─────────────────────────────────────────────────────────────────────────────────────────────────────
+─────────────────────────────────────────────────────────────────v────────────────────────────────────
 raw_customers ───┐
                  ├──► stg_customers ────┬──► dim_customer ─────┬──► pres_customer_360
 raw_addresses ───┘                      │                      │

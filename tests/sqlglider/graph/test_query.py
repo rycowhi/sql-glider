@@ -9,6 +9,7 @@ from sqlglider.graph.models import (
     GraphEdge,
     GraphNode,
     LineageGraph,
+    LineageNode,
 )
 from sqlglider.graph.query import GraphQuerier, LineageQueryResult
 from sqlglider.graph.serialization import save_graph
@@ -440,3 +441,244 @@ class TestGraphQuerierComplexGraph:
 
         # Should be sorted alphabetically (case-insensitive)
         assert identifiers == ["a.col", "m.col", "z.col"]
+
+
+class TestLineageNodeModel:
+    """Tests for LineageNode Pydantic model."""
+
+    def test_from_graph_node(self):
+        """Test creating LineageNode from GraphNode."""
+        graph_node = GraphNode.from_identifier("table.col", "/path/q.sql", 0)
+        lineage_node = LineageNode.from_graph_node(
+            graph_node, hops=2, output_column="target.col"
+        )
+
+        assert lineage_node.identifier == "table.col"
+        assert lineage_node.table == "table"
+        assert lineage_node.column == "col"
+        assert lineage_node.file_path == "/path/q.sql"
+        assert lineage_node.query_index == 0
+        assert lineage_node.hops == 2
+        assert lineage_node.output_column == "target.col"
+
+    def test_model_dump_includes_hops_and_output(self):
+        """Test that model_dump includes hops and output_column."""
+        graph_node = GraphNode.from_identifier("schema.table.col", "/path/q.sql", 1)
+        lineage_node = LineageNode.from_graph_node(
+            graph_node, hops=3, output_column="out.col"
+        )
+
+        data = lineage_node.model_dump()
+
+        assert data["hops"] == 3
+        assert data["output_column"] == "out.col"
+        assert data["identifier"] == "schema.table.col"
+        assert data["schema_name"] == "schema"
+
+
+class TestHopCounting:
+    """Tests for hop distance tracking in query results."""
+
+    def test_single_hop_upstream(self):
+        """Test hop count for direct upstream dependency."""
+        nodes = [
+            GraphNode.from_identifier("source.col", "/path/q.sql", 0),
+            GraphNode.from_identifier("target.col", "/path/q.sql", 0),
+        ]
+        edges = [
+            GraphEdge(
+                source_node="source.col",
+                target_node="target.col",
+                file_path="/path/q.sql",
+                query_index=0,
+            )
+        ]
+        graph = LineageGraph(nodes=nodes, edges=edges)
+        querier = GraphQuerier(graph)
+
+        result = querier.find_upstream("target.col")
+
+        assert len(result) == 1
+        assert result.related_columns[0].hops == 1
+        assert result.related_columns[0].output_column == "target.col"
+
+    def test_single_hop_downstream(self):
+        """Test hop count for direct downstream dependency."""
+        nodes = [
+            GraphNode.from_identifier("source.col", "/path/q.sql", 0),
+            GraphNode.from_identifier("target.col", "/path/q.sql", 0),
+        ]
+        edges = [
+            GraphEdge(
+                source_node="source.col",
+                target_node="target.col",
+                file_path="/path/q.sql",
+                query_index=0,
+            )
+        ]
+        graph = LineageGraph(nodes=nodes, edges=edges)
+        querier = GraphQuerier(graph)
+
+        result = querier.find_downstream("source.col")
+
+        assert len(result) == 1
+        assert result.related_columns[0].hops == 1
+        assert result.related_columns[0].output_column == "source.col"
+
+    def test_multiple_hops_upstream(self):
+        """Test hop counts for transitive upstream dependencies."""
+        # a -> b -> c (chain)
+        nodes = [
+            GraphNode.from_identifier("a.col", "/path/q.sql", 0),
+            GraphNode.from_identifier("b.col", "/path/q.sql", 0),
+            GraphNode.from_identifier("c.col", "/path/q.sql", 0),
+        ]
+        edges = [
+            GraphEdge(
+                source_node="a.col",
+                target_node="b.col",
+                file_path="/path/q.sql",
+                query_index=0,
+            ),
+            GraphEdge(
+                source_node="b.col",
+                target_node="c.col",
+                file_path="/path/q.sql",
+                query_index=0,
+            ),
+        ]
+        graph = LineageGraph(nodes=nodes, edges=edges)
+        querier = GraphQuerier(graph)
+
+        result = querier.find_upstream("c.col")
+
+        # Sort by hops for predictable ordering in assertions
+        by_hops = sorted(result.related_columns, key=lambda n: n.hops)
+
+        assert len(by_hops) == 2
+        assert by_hops[0].identifier == "b.col"
+        assert by_hops[0].hops == 1
+        assert by_hops[1].identifier == "a.col"
+        assert by_hops[1].hops == 2
+
+        # All should have same output_column
+        for node in result.related_columns:
+            assert node.output_column == "c.col"
+
+    def test_multiple_hops_downstream(self):
+        """Test hop counts for transitive downstream dependencies."""
+        # a -> b -> c (chain)
+        nodes = [
+            GraphNode.from_identifier("a.col", "/path/q.sql", 0),
+            GraphNode.from_identifier("b.col", "/path/q.sql", 0),
+            GraphNode.from_identifier("c.col", "/path/q.sql", 0),
+        ]
+        edges = [
+            GraphEdge(
+                source_node="a.col",
+                target_node="b.col",
+                file_path="/path/q.sql",
+                query_index=0,
+            ),
+            GraphEdge(
+                source_node="b.col",
+                target_node="c.col",
+                file_path="/path/q.sql",
+                query_index=0,
+            ),
+        ]
+        graph = LineageGraph(nodes=nodes, edges=edges)
+        querier = GraphQuerier(graph)
+
+        result = querier.find_downstream("a.col")
+
+        # Sort by hops for predictable ordering in assertions
+        by_hops = sorted(result.related_columns, key=lambda n: n.hops)
+
+        assert len(by_hops) == 2
+        assert by_hops[0].identifier == "b.col"
+        assert by_hops[0].hops == 1
+        assert by_hops[1].identifier == "c.col"
+        assert by_hops[1].hops == 2
+
+        # All should have same output_column
+        for node in result.related_columns:
+            assert node.output_column == "a.col"
+
+    def test_diamond_hop_counts(self):
+        """Test hop counts in diamond-shaped dependency graph."""
+        # A -> B, A -> C, B -> D, C -> D
+        # From D: A is 2 hops via B or via C
+        nodes = [
+            GraphNode.from_identifier("a.col", "/path/q.sql", 0),
+            GraphNode.from_identifier("b.col", "/path/q.sql", 0),
+            GraphNode.from_identifier("c.col", "/path/q.sql", 0),
+            GraphNode.from_identifier("d.col", "/path/q.sql", 0),
+        ]
+        edges = [
+            GraphEdge(
+                source_node="a.col",
+                target_node="b.col",
+                file_path="/p.sql",
+                query_index=0,
+            ),
+            GraphEdge(
+                source_node="a.col",
+                target_node="c.col",
+                file_path="/p.sql",
+                query_index=0,
+            ),
+            GraphEdge(
+                source_node="b.col",
+                target_node="d.col",
+                file_path="/p.sql",
+                query_index=0,
+            ),
+            GraphEdge(
+                source_node="c.col",
+                target_node="d.col",
+                file_path="/p.sql",
+                query_index=0,
+            ),
+        ]
+        graph = LineageGraph(nodes=nodes, edges=edges)
+        querier = GraphQuerier(graph)
+
+        result = querier.find_upstream("d.col")
+        hops_map = {n.identifier: n.hops for n in result.related_columns}
+
+        # B and C are 1 hop from D
+        assert hops_map["b.col"] == 1
+        assert hops_map["c.col"] == 1
+        # A is 2 hops from D (shortest path via either B or C)
+        assert hops_map["a.col"] == 2
+
+    def test_output_column_preserved_for_all_nodes(self):
+        """Test that output_column is consistent across all result nodes."""
+        nodes = [
+            GraphNode.from_identifier("src1.col", "/path/q.sql", 0),
+            GraphNode.from_identifier("src2.col", "/path/q.sql", 0),
+            GraphNode.from_identifier("target.col", "/path/q.sql", 0),
+        ]
+        edges = [
+            GraphEdge(
+                source_node="src1.col",
+                target_node="target.col",
+                file_path="/p.sql",
+                query_index=0,
+            ),
+            GraphEdge(
+                source_node="src2.col",
+                target_node="target.col",
+                file_path="/p.sql",
+                query_index=0,
+            ),
+        ]
+        graph = LineageGraph(nodes=nodes, edges=edges)
+        querier = GraphQuerier(graph)
+
+        result = querier.find_upstream("target.col")
+
+        assert len(result) == 2
+        for node in result.related_columns:
+            assert node.output_column == "target.col"
