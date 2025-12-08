@@ -83,6 +83,13 @@ class GraphBuilder:
             analyzer = LineageAnalyzer(sql_content, dialect=file_dialect)
             results = analyzer.analyze_queries(level="column")
 
+            # Print warnings for any skipped queries within the file
+            for skipped in analyzer.skipped_queries:
+                console.print(
+                    f"[yellow]Warning:[/yellow] Skipping query {skipped.query_index} "
+                    f"in {file_path.name} ({skipped.statement_type}): {skipped.reason}"
+                )
+
             self._source_files.add(file_path_str)
 
             for result in results:
@@ -119,11 +126,11 @@ class GraphBuilder:
                         self._edge_set.add(edge_key)
 
         except ValueError as e:
-            # Skip files with non-SELECT statements (DELETE, TRUNCATE, etc.)
+            # Skip files that fail completely (all statements unsupported)
             error_msg = str(e)
             self._skipped_files.append((file_path_str, error_msg))
             console.print(
-                f"[yellow]Warning:[/yellow] Skipping {file_path_str}: {error_msg}"
+                f"[yellow]Warning:[/yellow] Skipping {file_path.name}: {error_msg}"
             )
 
         return self

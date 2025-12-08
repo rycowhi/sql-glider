@@ -1,6 +1,6 @@
 """Core lineage analysis using SQLGlot."""
 
-from typing import Iterator, Literal, List, Optional, Set, Tuple
+from typing import Callable, Iterator, Literal, List, Optional, Set, Tuple
 
 from pydantic import BaseModel, Field
 from sqlglot import exp, parse
@@ -30,6 +30,19 @@ class QueryLineageResult(BaseModel):
     level: Literal["column", "table"]
 
 
+class SkippedQuery(BaseModel):
+    """Information about a query that was skipped during analysis."""
+
+    query_index: int = Field(..., description="0-based query index")
+    statement_type: str = Field(..., description="Type of SQL statement (e.g., CREATE)")
+    reason: str = Field(..., description="Reason for skipping")
+    query_preview: str = Field(..., description="First 100 chars of query")
+
+
+# Type alias for warning callback function
+WarningCallback = Callable[[str], None]
+
+
 class LineageAnalyzer:
     """Analyze column and table lineage for SQL queries."""
 
@@ -46,6 +59,7 @@ class LineageAnalyzer:
         """
         self.sql = sql
         self.dialect = dialect
+        self._skipped_queries: List[SkippedQuery] = []
 
         try:
             # Parse all statements in the SQL string
@@ -63,6 +77,11 @@ class LineageAnalyzer:
         except ParseError as e:
             raise ParseError(f"Invalid SQL syntax: {e}") from e
 
+    @property
+    def skipped_queries(self) -> List[SkippedQuery]:
+        """Get list of queries that were skipped during analysis."""
+        return self._skipped_queries.copy()
+
     def get_output_columns(self) -> List[str]:
         """
         Extract all output column names from the query with full qualification.
@@ -72,6 +91,9 @@ class LineageAnalyzer:
 
         Returns:
             List of fully qualified output column names (table.column or database.table.column)
+
+        Raises:
+            ValueError: If the statement type is not supported for lineage analysis
         """
         columns = []
 
@@ -79,7 +101,15 @@ class LineageAnalyzer:
         self._column_mapping = {}  # Maps qualified name -> lineage column name
 
         # Check if this is a DML/DDL statement
-        target_table, select_node = self._get_target_and_select()
+        result = self._get_target_and_select()
+        if result is None:
+            # Unsupported statement type
+            stmt_type = self._get_statement_type()
+            raise ValueError(
+                f"Statement type '{stmt_type}' does not support lineage analysis"
+            )
+
+        target_table, select_node = result
 
         if target_table:
             # DML/DDL: Use target table for output column qualification
@@ -204,6 +234,7 @@ class LineageAnalyzer:
             results = analyzer.analyze_queries(table_filter="customers")
         """
         results = []
+        self._skipped_queries = []  # Reset skipped queries for this analysis
 
         for query_index, expr, preview in self._iterate_queries(table_filter):
             # Temporarily swap self.expr to analyze this query
@@ -241,6 +272,17 @@ class LineageAnalyzer:
                         ),
                         lineage_items=lineage_items,
                         level=level,
+                    )
+                )
+            except ValueError as e:
+                # Unsupported statement type - track it and continue
+                stmt_type = self._get_statement_type(expr)
+                self._skipped_queries.append(
+                    SkippedQuery(
+                        query_index=query_index,
+                        statement_type=stmt_type,
+                        reason=str(e),
+                        query_preview=preview,
                     )
                 )
             finally:
@@ -414,7 +456,38 @@ class LineageAnalyzer:
 
         return lineage_items
 
-    def _get_target_and_select(self) -> tuple[Optional[str], exp.Select]:
+    def _get_statement_type(self, expr: Optional[exp.Expression] = None) -> str:
+        """
+        Get a human-readable name for the SQL statement type.
+
+        Args:
+            expr: Expression to check (uses self.expr if not provided)
+
+        Returns:
+            Statement type name (e.g., "CREATE FUNCTION", "SELECT", "DELETE")
+        """
+        target_expr = expr if expr is not None else self.expr
+        expr_type = type(target_expr).__name__
+
+        # Map common expression types to more readable names
+        type_map = {
+            "Select": "SELECT",
+            "Insert": "INSERT",
+            "Update": "UPDATE",
+            "Delete": "DELETE",
+            "Merge": "MERGE",
+            "Create": f"CREATE {getattr(target_expr, 'kind', '')}".strip(),
+            "Drop": f"DROP {getattr(target_expr, 'kind', '')}".strip(),
+            "Alter": "ALTER",
+            "Truncate": "TRUNCATE",
+            "Command": "COMMAND",
+        }
+
+        return type_map.get(expr_type, expr_type.upper())
+
+    def _get_target_and_select(
+        self,
+    ) -> Optional[tuple[Optional[str], exp.Select]]:
         """
         Detect if this is a DML/DDL statement and extract the target table and SELECT node.
 
@@ -422,6 +495,7 @@ class LineageAnalyzer:
             Tuple of (target_table_name, select_node) where:
             - target_table_name is the fully qualified target table for DML/DDL, or None for pure SELECT
             - select_node is the SELECT statement that provides the data
+            - Returns None if the statement type doesn't contain a SELECT (e.g., CREATE FUNCTION)
 
         Handles:
         - INSERT INTO table SELECT ...
@@ -440,9 +514,9 @@ class LineageAnalyzer:
                 if isinstance(select_node, exp.Select):
                     return (target_name, select_node)
 
-        # Check for CREATE TABLE AS SELECT (CTAS)
+        # Check for CREATE TABLE AS SELECT (CTAS) or CREATE VIEW AS SELECT
         elif isinstance(self.expr, exp.Create):
-            if self.expr.kind == "TABLE":
+            if self.expr.kind in ("TABLE", "VIEW"):
                 target = self.expr.this
                 if isinstance(target, exp.Schema):
                     # Get the table from schema
@@ -484,8 +558,8 @@ class LineageAnalyzer:
         if isinstance(self.expr, exp.Select):
             return (None, self.expr)
 
-        # No SELECT found
-        raise ValueError("No SELECT statement found in the query")
+        # No SELECT found - return None to indicate unsupported statement
+        return None
 
     def _get_qualified_table_name(self, table: exp.Table) -> str:
         """

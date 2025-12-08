@@ -108,7 +108,9 @@ class TestLineageCommand:
         )
 
         assert result.exit_code == 0
-        assert "----------" in result.stdout
+        # Rich table output should contain table headers
+        assert "Output Column" in result.stdout
+        assert "Source Column" in result.stdout
 
     def test_lineage_table_level(self, sample_sql_file):
         """Test table-level lineage analysis."""
@@ -420,8 +422,8 @@ output_format = "json"
                 )
 
                 assert result.exit_code == 0
-                # Should use text format (CLI override)
-                assert "----------" in result.stdout
+                # Should use text format (CLI override) - Rich table
+                assert "Output Column" in result.stdout
                 # Should NOT be JSON
                 assert not result.stdout.strip().startswith("{")
             finally:
@@ -448,8 +450,8 @@ output_format = "json"
                 result = runner.invoke(app, ["lineage", "query.sql"])
 
                 assert result.exit_code == 0
-                # Should use default text format
-                assert "----------" in result.stdout
+                # Should use default text format (Rich table)
+                assert "Output Column" in result.stdout
             finally:
                 os.chdir(original_cwd)
 
@@ -481,8 +483,8 @@ dialect = "snowflake"
                 result = runner.invoke(app, ["lineage", "query.sql"])
 
                 assert result.exit_code == 0
-                # Should use default text format (not in config)
-                assert "----------" in result.stdout
+                # Should use default text format (Rich table)
+                assert "Output Column" in result.stdout
             finally:
                 os.chdir(original_cwd)
 
@@ -526,9 +528,10 @@ output_format = "json"
                 )
 
                 assert result.exit_code == 0
-                # Should use text format (CLI override)
+                # Should use text format (CLI override) - Rich table
                 # and table level (from config)
-                assert "----------" in result.stdout
+                assert "Output Table" in result.stdout
+                assert "Source Table" in result.stdout
                 # Table level output should show tables
                 assert "customers" in result.stdout or "orders" in result.stdout
             finally:
@@ -563,8 +566,8 @@ dialect = "postgres"  # Missing closing bracket
 
                 # Should still work with defaults
                 assert result.exit_code == 0
-                # Should use default text format
-                assert "----------" in result.stdout
+                # Should use default text format (Rich table)
+                assert "Output Column" in result.stdout
             finally:
                 os.chdir(original_cwd)
 
@@ -575,8 +578,8 @@ dialect = "postgres"  # Missing closing bracket
         result = runner.invoke(app, ["lineage", str(sample_sql_file)])
 
         assert result.exit_code == 0
-        # Should use default values
-        assert "----------" in result.stdout
+        # Should use default values (Rich table format)
+        assert "Output Column" in result.stdout
 
 
 class TestGraphBuildCommand:

@@ -358,7 +358,7 @@ class TestGraphBuilderEdgeCases:
             temp_path.unlink()
 
     def test_skip_non_select_statements(self):
-        """Test that non-SELECT statements are gracefully skipped."""
+        """Test that non-SELECT statements are gracefully skipped with warnings."""
         with TemporaryDirectory() as tmpdir:
             temp_dir = Path(tmpdir)
 
@@ -383,20 +383,15 @@ class TestGraphBuilderEdgeCases:
 
             graph = builder.build()
 
-            # Only the SELECT file should be processed
+            # Only the SELECT file should have nodes in the graph
             assert graph.metadata.total_nodes > 0
-            assert len(graph.metadata.source_files) == 1
+            # All files are parsed successfully and added to source_files
+            # (individual queries within are skipped, not entire files)
+            assert len(graph.metadata.source_files) == 3
             assert str(select_file.resolve()) in graph.metadata.source_files
 
-            # Two files should be skipped
-            skipped = builder.skipped_files
-            assert len(skipped) == 2
-            assert any(str(delete_file.resolve()) in path for path, _ in skipped)
-            assert any(str(update_file.resolve()) in path for path, _ in skipped)
-            assert all("No SELECT statement found" in reason for _, reason in skipped)
-
     def test_skipped_files_property(self):
-        """Test access to skipped files list."""
+        """Test access to skipped files list - now empty since queries are skipped individually."""
         with NamedTemporaryFile(
             mode="w", suffix=".sql", delete=False, encoding="utf-8"
         ) as f:
@@ -407,10 +402,12 @@ class TestGraphBuilderEdgeCases:
             builder = GraphBuilder()
             builder.add_file(temp_path)
 
+            # With the new behavior, individual queries are skipped (with warnings)
+            # but the file itself is not added to skipped_files since parsing succeeded.
+            # The skipped_files property only tracks files that fail completely (e.g., parse errors).
             skipped = builder.skipped_files
             assert isinstance(skipped, list)
-            assert len(skipped) == 1
-            assert str(temp_path.resolve()) in skipped[0][0]
-            assert "No SELECT statement found" in skipped[0][1]
+            # File is processed but queries within are skipped - file not in skipped_files
+            assert len(skipped) == 0
         finally:
             temp_path.unlink()

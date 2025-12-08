@@ -1356,3 +1356,93 @@ class TestMultiQueryIsolation:
         query1_sources = [item.source_name for item in results[1].lineage_items]
         assert all("orders" in s for s in query1_sources)
         assert not any("products" in s for s in query1_sources)
+
+
+class TestSkippedQueries:
+    """Tests for handling unsupported statement types."""
+
+    def test_skipped_queries_property(self):
+        """Test that unsupported statements are tracked in skipped_queries."""
+        sql = """
+        CREATE TEMPORARY FUNCTION my_udf AS 'com.example.MyUDF';
+        SELECT customer_id FROM customers;
+        DELETE FROM orders WHERE id = 1;
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_queries(level="column")
+
+        # Only the SELECT query should have results
+        assert len(results) == 1
+        assert results[0].metadata.query_index == 1  # Second statement (0-indexed)
+
+        # Two queries should be skipped
+        skipped = analyzer.skipped_queries
+        assert len(skipped) == 2
+
+        # Check first skipped query (CREATE FUNCTION)
+        assert skipped[0].query_index == 0
+        assert "CREATE" in skipped[0].statement_type
+        assert "does not support lineage analysis" in skipped[0].reason
+
+        # Check second skipped query (DELETE)
+        assert skipped[1].query_index == 2
+        assert "DELETE" in skipped[1].statement_type
+        assert "does not support lineage analysis" in skipped[1].reason
+
+    def test_no_skipped_queries_for_supported_statements(self):
+        """Test that all supported statements don't create skipped queries."""
+        sql = """
+        SELECT customer_id FROM customers;
+        INSERT INTO target SELECT id FROM source;
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_queries(level="column")
+
+        # Both queries should be analyzed
+        assert len(results) == 2
+
+        # No queries should be skipped
+        assert len(analyzer.skipped_queries) == 0
+
+    def test_get_statement_type(self):
+        """Test statement type detection for various SQL statements."""
+        test_cases = [
+            ("SELECT * FROM t", "SELECT"),
+            ("INSERT INTO t SELECT * FROM s", "INSERT"),
+            ("DELETE FROM t WHERE id = 1", "DELETE"),
+            ("TRUNCATE TABLE t", "TRUNCATETABLE"),
+        ]
+
+        for sql, expected_contains in test_cases:
+            analyzer = LineageAnalyzer(sql, dialect="spark")
+            stmt_type = analyzer._get_statement_type()
+            assert expected_contains in stmt_type, f"Expected '{expected_contains}' in '{stmt_type}' for: {sql}"
+
+    def test_mixed_statements_preserves_order(self):
+        """Test that query indices are preserved correctly when some are skipped."""
+        sql = """
+        DROP TABLE old_table;
+        SELECT a FROM first_table;
+        TRUNCATE TABLE temp;
+        SELECT b FROM second_table;
+        CREATE VIEW v AS SELECT 1;
+        SELECT c FROM third_table;
+        DELETE FROM cleanup_table;
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_queries(level="column")
+
+        # Should have 4 results (3 SELECTs + CREATE VIEW which contains a SELECT)
+        assert len(results) == 4
+        # Query indices should reflect original positions
+        assert results[0].metadata.query_index == 1  # First SELECT
+        assert results[1].metadata.query_index == 3  # Second SELECT
+        assert results[2].metadata.query_index == 4  # CREATE VIEW (has SELECT inside)
+        assert results[3].metadata.query_index == 5  # Third SELECT
+
+        # Should have 3 skipped queries (DROP, TRUNCATE, DELETE)
+        skipped = analyzer.skipped_queries
+        assert len(skipped) == 3
+        assert skipped[0].query_index == 0  # DROP
+        assert skipped[1].query_index == 2  # TRUNCATE
+        assert skipped[2].query_index == 6  # DELETE

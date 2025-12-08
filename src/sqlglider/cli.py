@@ -250,19 +250,45 @@ def lineage(
             table_filter=table_filter,
         )
 
-        # Format output based on output format
+        # Print warnings for skipped queries
+        for skipped in analyzer.skipped_queries:
+            err_console.print(
+                f"[yellow]Warning:[/yellow] Skipping query {skipped.query_index} "
+                f"({skipped.statement_type}): {skipped.reason}"
+            )
+
+        # Format and output based on output format
         if output_format == "text":
-            formatted = TextFormatter.format(results)
+            if output_file:
+                # For file output, use a string-based console to capture output
+                from io import StringIO
+
+                from rich.console import Console as FileConsole
+
+                string_buffer = StringIO()
+                file_console = FileConsole(file=string_buffer, force_terminal=False)
+                TextFormatter.format(results, file_console)
+                output_file.write_text(string_buffer.getvalue(), encoding="utf-8")
+                console.print(
+                    f"[green]Success:[/green] Lineage written to {output_file}"
+                )
+            else:
+                # Direct console output with Rich formatting
+                TextFormatter.format(results, console)
         elif output_format == "json":
             formatted = JsonFormatter.format(results)
+            OutputWriter.write(formatted, output_file)
+            if output_file:
+                console.print(
+                    f"[green]Success:[/green] Lineage written to {output_file}"
+                )
         else:  # csv
             formatted = CsvFormatter.format(results)
-
-        # Write output
-        OutputWriter.write(formatted, output_file)
-
-        if output_file:
-            console.print(f"[green]Success:[/green] Lineage written to {output_file}")
+            OutputWriter.write(formatted, output_file)
+            if output_file:
+                console.print(
+                    f"[green]Success:[/green] Lineage written to {output_file}"
+                )
 
     except FileNotFoundError as e:
         err_console.print(f"[red]Error:[/red] {e}")

@@ -6,6 +6,7 @@ from io import StringIO
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
+from rich.console import Console
 
 from sqlglider.lineage.analyzer import (
     LineageItem,
@@ -18,6 +19,14 @@ from sqlglider.lineage.formatters import (
     OutputWriter,
     TextFormatter,
 )
+
+
+def _capture_text_format(results):
+    """Helper to capture TextFormatter output as a string."""
+    buffer = StringIO()
+    console = Console(file=buffer, force_terminal=False)
+    TextFormatter.format(results, console)
+    return buffer.getvalue()
 
 
 class TestTextFormatter:
@@ -41,11 +50,11 @@ class TestTextFormatter:
             )
         ]
 
-        result = TextFormatter.format(results)
+        result = _capture_text_format(results)
 
-        assert "==========" in result
         assert "Query 0:" in result
-        assert "----------" in result
+        assert "Output Column" in result
+        assert "Source Column" in result
         assert "orders.customer_name" in result
         assert "customers.name" in result
 
@@ -71,7 +80,7 @@ class TestTextFormatter:
             )
         ]
 
-        result = TextFormatter.format(results)
+        result = _capture_text_format(results)
 
         assert "orders.total" in result
         assert "order_items.price" in result
@@ -108,7 +117,7 @@ class TestTextFormatter:
             ),
         ]
 
-        result = TextFormatter.format(results)
+        result = _capture_text_format(results)
 
         assert "Query 0:" in result
         assert "Query 1:" in result
@@ -137,16 +146,61 @@ class TestTextFormatter:
             )
         ]
 
-        result = TextFormatter.format(results)
+        result = _capture_text_format(results)
 
+        assert "Output Table" in result
+        assert "Source Table" in result
         assert "query_result" in result
         assert "customers" in result
         assert "orders" in result
 
     def test_format_empty_results(self):
         """Test formatting empty results."""
-        result = TextFormatter.format([])
-        assert result == ""
+        result = _capture_text_format([])
+        assert "No lineage results found" in result
+
+    def test_format_output_with_no_sources(self):
+        """Test formatting output columns that have no sources."""
+        results = [
+            QueryLineageResult(
+                metadata=QueryMetadata(
+                    query_index=0,
+                    query_preview="SELECT 'literal' as constant",
+                ),
+                lineage_items=[
+                    LineageItem(
+                        output_name="constant",
+                        source_name="",  # No source for literal
+                    )
+                ],
+                level="column",
+            )
+        ]
+
+        result = _capture_text_format(results)
+
+        assert "constant" in result
+        assert "(no sources)" in result
+
+    def test_format_row_count(self):
+        """Test that row count is displayed."""
+        results = [
+            QueryLineageResult(
+                metadata=QueryMetadata(
+                    query_index=0,
+                    query_preview="SELECT a, b FROM t",
+                ),
+                lineage_items=[
+                    LineageItem(output_name="t.a", source_name="t.a"),
+                    LineageItem(output_name="t.b", source_name="t.b"),
+                ],
+                level="column",
+            )
+        ]
+
+        result = _capture_text_format(results)
+
+        assert "Total: 2 row(s)" in result
 
 
 class TestJsonFormatter:

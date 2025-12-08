@@ -6,55 +6,54 @@ from io import StringIO
 from pathlib import Path
 from typing import List, Optional
 
+from rich.console import Console
+from rich.table import Table
+from rich.text import Text
+
 from sqlglider.lineage.analyzer import QueryLineageResult
 
 
 class TextFormatter:
-    """Format lineage results as plain text."""
+    """Format lineage results as Rich tables for terminal display."""
 
     @staticmethod
-    def format(results: List[QueryLineageResult]) -> str:
+    def format(results: List[QueryLineageResult], console: Console) -> None:
         """
-        Format lineage results as text.
+        Format and print lineage results as Rich tables.
 
-        Output format for column lineage:
-        ==========
-        Query 0: SELECT ...
-        ==========
-        ----------
-        output_column
-        ----------
-        source1
-        source2
-
-        Output format for table lineage:
-        ==========
-        Query 0: SELECT ...
-        ==========
-        ----------
-        output_table
-        ----------
-        source_table1
-        source_table2
+        Creates a styled table for each query showing output columns and their sources.
+        For column-level lineage, shows Output Column and Source Column.
+        For table-level lineage, shows Output Table and Source Table.
 
         Args:
             results: List of QueryLineageResult objects
-
-        Returns:
-            Formatted text string
+            console: Rich Console instance for output
         """
         if not results:
-            return ""
+            console.print("[yellow]No lineage results found.[/yellow]")
+            return
 
-        output = []
+        for i, result in enumerate(results):
+            # Add spacing between tables (except for first)
+            if i > 0:
+                console.print()
 
-        for result in results:
-            # Query header
-            output.append("=" * 10)
-            output.append(
+            # Determine column headers based on level
+            if result.level == "column":
+                output_header = "Output Column"
+                source_header = "Source Column"
+            else:
+                output_header = "Output Table"
+                source_header = "Source Table"
+
+            # Create table with query info as title
+            title = (
                 f"Query {result.metadata.query_index}: {result.metadata.query_preview}"
             )
-            output.append("=" * 10)
+            table = Table(title=title, title_style="bold")
+
+            table.add_column(output_header, style="cyan")
+            table.add_column(source_header, style="green")
 
             # Group lineage items by output_name
             output_groups: dict[str, list[str]] = {}
@@ -64,15 +63,25 @@ class TextFormatter:
                 if item.source_name:  # Skip empty sources
                     output_groups[item.output_name].append(item.source_name)
 
-            # Format each output group
+            # Add rows to table
+            row_count = 0
             for output_name in sorted(output_groups.keys()):
-                output.append("-" * 10)
-                output.append(output_name)
-                output.append("-" * 10)
-                for source in sorted(output_groups[output_name]):
-                    output.append(source)
+                sources = sorted(output_groups[output_name])
+                if sources:
+                    # First source gets the output name
+                    table.add_row(output_name, sources[0])
+                    row_count += 1
+                    # Additional sources get empty output column
+                    for source in sources[1:]:
+                        table.add_row("", source)
+                        row_count += 1
+                else:
+                    # No sources found for this output
+                    table.add_row(output_name, Text("(no sources)", style="dim"))
+                    row_count += 1
 
-        return "\n".join(output)
+            console.print(table)
+            console.print(f"[dim]Total: {row_count} row(s)[/dim]")
 
 
 class JsonFormatter:
