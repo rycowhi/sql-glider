@@ -5,12 +5,22 @@ Loads configuration from sqlglider.toml in the current working directory.
 
 import tomllib
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from pydantic import BaseModel
 from rich.console import Console
 
 console = Console(stderr=True)
+
+
+class TemplatingConfig(BaseModel):
+    """Configuration for the templating system.
+
+    All fields are optional.
+    """
+
+    variables_file: Optional[str] = None
+    variables: Optional[Dict[str, Any]] = None
 
 
 class ConfigSettings(BaseModel):
@@ -23,6 +33,8 @@ class ConfigSettings(BaseModel):
     dialect: Optional[str] = None
     level: Optional[str] = None
     output_format: Optional[str] = None
+    templater: Optional[str] = None
+    templating: Optional[TemplatingConfig] = None
 
 
 def find_config_file(start_path: Optional[Path] = None) -> Optional[Path]:

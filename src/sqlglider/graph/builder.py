@@ -2,7 +2,7 @@
 
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Literal, Optional, Set
+from typing import Callable, Dict, List, Literal, Optional, Set
 
 import rustworkx as rx
 from rich.console import Console
@@ -19,6 +19,9 @@ from sqlglider.utils.file_utils import read_sql_file
 
 console = Console(stderr=True)
 
+# Type alias for SQL preprocessor functions
+SqlPreprocessor = Callable[[str, Path], str]
+
 
 class GraphBuilder:
     """Build lineage graphs from SQL files using rustworkx."""
@@ -27,6 +30,7 @@ class GraphBuilder:
         self,
         node_format: Literal["qualified", "structured"] = "qualified",
         dialect: str = "spark",
+        sql_preprocessor: Optional[SqlPreprocessor] = None,
     ):
         """
         Initialize the graph builder.
@@ -34,9 +38,13 @@ class GraphBuilder:
         Args:
             node_format: Format for node identifiers ("qualified" or "structured")
             dialect: Default SQL dialect (used when not specified per-file)
+            sql_preprocessor: Optional function to preprocess SQL before analysis.
+                             Takes (sql: str, file_path: Path) and returns processed SQL.
+                             Useful for templating (e.g., Jinja2 rendering).
         """
         self.node_format = node_format
         self.dialect = dialect
+        self.sql_preprocessor = sql_preprocessor
         self.graph: rx.PyDiGraph = rx.PyDiGraph()
         self._node_index_map: Dict[str, int] = {}  # identifier -> rustworkx node index
         self._source_files: Set[str] = set()
@@ -67,6 +75,11 @@ class GraphBuilder:
 
         try:
             sql_content = read_sql_file(file_path)
+
+            # Apply SQL preprocessor if configured (e.g., for templating)
+            if self.sql_preprocessor:
+                sql_content = self.sql_preprocessor(sql_content, file_path)
+
             analyzer = LineageAnalyzer(sql_content, dialect=file_dialect)
             results = analyzer.analyze_queries(level="column")
 

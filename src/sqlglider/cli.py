@@ -16,6 +16,12 @@ from sqlglider.lineage.formatters import (
     OutputWriter,
     TextFormatter,
 )
+from sqlglider.templating import (
+    TemplaterError,
+    get_templater,
+    list_templaters,
+    load_all_variables,
+)
 from sqlglider.utils.config import load_config
 from sqlglider.utils.file_utils import read_sql_file
 
@@ -26,6 +32,58 @@ app = typer.Typer(
 )
 console = Console()
 err_console = Console(stderr=True)
+
+
+def _apply_templating(
+    sql: str,
+    templater_name: Optional[str],
+    cli_vars: Optional[List[str]],
+    vars_file: Optional[Path],
+    config,
+    source_path: Optional[Path] = None,
+) -> str:
+    """Apply templating to SQL if a templater is specified.
+
+    Args:
+        sql: The SQL string to template.
+        templater_name: Name of the templater to use (e.g., "jinja").
+                       If None, returns sql unchanged.
+        cli_vars: List of CLI variable strings in "key=value" format.
+        vars_file: Path to a variables file (JSON or YAML).
+        config: The loaded ConfigSettings object.
+        source_path: Path to source file for resolving includes.
+
+    Returns:
+        The templated SQL string, or the original if no templater specified.
+    """
+    if not templater_name:
+        return sql
+
+    # Get variables from config
+    config_vars_file = None
+    config_vars = None
+    if config.templating:
+        if config.templating.variables_file and not vars_file:
+            config_vars_file = Path(config.templating.variables_file)
+            if not config_vars_file.exists():
+                err_console.print(
+                    f"[yellow]Warning:[/yellow] Variables file from config "
+                    f"not found: {config_vars_file}"
+                )
+                config_vars_file = None
+        config_vars = config.templating.variables
+
+    # Load variables from all sources
+    variables = load_all_variables(
+        cli_vars=cli_vars,
+        vars_file=vars_file or config_vars_file,
+        config_vars=config_vars,
+        use_env=True,
+    )
+
+    # Get templater instance and render
+    templater_instance = get_templater(templater_name)
+    return templater_instance.render(sql, variables=variables, source_path=source_path)
 
 
 @app.callback()
@@ -71,7 +129,6 @@ def lineage(
     table_filter: Optional[str] = typer.Option(
         None,
         "--table",
-        "-t",
         help="Filter to only queries that reference this table (for multi-query files)",
     ),
     output_format: Optional[str] = typer.Option(
@@ -85,6 +142,24 @@ def lineage(
         "--output-file",
         "-o",
         help="Write output to file instead of stdout",
+    ),
+    templater: Optional[str] = typer.Option(
+        None,
+        "--templater",
+        "-t",
+        help="Templater for SQL preprocessing (e.g., 'jinja', 'none')",
+    ),
+    var: Optional[List[str]] = typer.Option(
+        None,
+        "--var",
+        "-v",
+        help="Template variable in key=value format (repeatable)",
+    ),
+    vars_file: Optional[Path] = typer.Option(
+        None,
+        "--vars-file",
+        exists=True,
+        help="Path to variables file (JSON or YAML)",
     ),
 ) -> None:
     """
@@ -112,6 +187,12 @@ def lineage(
 
         # Use different SQL dialect
         sqlglider lineage query.sql --dialect postgres
+
+        # Analyze templated SQL with Jinja2
+        sqlglider lineage query.sql --templater jinja --var schema=analytics
+
+        # Use variables file for templating
+        sqlglider lineage query.sql --templater jinja --vars-file vars.json
     """
     # Load configuration from sqlglider.toml (if it exists)
     config = load_config()
@@ -120,6 +201,7 @@ def lineage(
     dialect = dialect or config.dialect or "spark"
     level = level or config.level or "column"
     output_format = output_format or config.output_format or "text"
+    templater = templater or config.templater  # None means no templating
     # Validate level
     if level not in ["column", "table"]:
         err_console.print(
@@ -146,6 +228,16 @@ def lineage(
     try:
         # Read SQL file
         sql = read_sql_file(sql_file)
+
+        # Apply templating if specified
+        sql = _apply_templating(
+            sql,
+            templater_name=templater,
+            cli_vars=var,
+            vars_file=vars_file,
+            config=config,
+            source_path=sql_file,
+        )
 
         # Create analyzer
         analyzer = LineageAnalyzer(sql, dialect=dialect)
@@ -178,6 +270,135 @@ def lineage(
 
     except ParseError as e:
         err_console.print(f"[red]Error:[/red] Failed to parse SQL: {e}")
+        raise typer.Exit(1)
+
+    except TemplaterError as e:
+        err_console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+
+    except ValueError as e:
+        err_console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+
+    except Exception as e:
+        err_console.print(f"[red]Error:[/red] Unexpected error: {e}")
+        raise typer.Exit(1)
+
+
+@app.command()
+def template(
+    sql_file: Path = typer.Argument(
+        ...,
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        help="Path to SQL template file to render",
+    ),
+    templater: Optional[str] = typer.Option(
+        None,
+        "--templater",
+        "-t",
+        help="Templater to use (default: jinja, or from config)",
+    ),
+    var: Optional[List[str]] = typer.Option(
+        None,
+        "--var",
+        "-v",
+        help="Template variable in key=value format (repeatable)",
+    ),
+    vars_file: Optional[Path] = typer.Option(
+        None,
+        "--vars-file",
+        exists=True,
+        help="Path to variables file (JSON or YAML)",
+    ),
+    output_file: Optional[Path] = typer.Option(
+        None,
+        "--output-file",
+        "-o",
+        help="Write output to file instead of stdout",
+    ),
+    list_available: bool = typer.Option(
+        False,
+        "--list",
+        "-l",
+        help="List available templaters and exit",
+    ),
+) -> None:
+    """
+    Render a SQL template file with variable substitution.
+
+    Uses the specified templater (default: jinja) to process the SQL file
+    with template variables. Variables can be provided via CLI, file, or config.
+
+    Configuration can be set in sqlglider.toml in the current directory.
+    CLI arguments override configuration file values.
+
+    Examples:
+
+        # Basic template rendering
+        sqlglider template query.sql --var schema=analytics --var table=users
+
+        # Using a variables file
+        sqlglider template query.sql --vars-file vars.json
+
+        # Output to file
+        sqlglider template query.sql --var schema=prod -o rendered.sql
+
+        # List available templaters
+        sqlglider template query.sql --list
+
+        # Use specific templater
+        sqlglider template query.sql --templater jinja --var name=test
+    """
+    # Handle --list option
+    if list_available:
+        available = list_templaters()
+        if available:
+            console.print("[bold]Available templaters:[/bold]")
+            for name in available:
+                console.print(f"  - {name}")
+        else:
+            console.print("[yellow]No templaters available[/yellow]")
+        raise typer.Exit(0)
+
+    # Load configuration from sqlglider.toml (if it exists)
+    config = load_config()
+
+    # Apply priority resolution: CLI args > config > defaults
+    # For template command, default to "jinja" (always apply templating)
+    templater = templater or config.templater or "jinja"
+
+    try:
+        # Read SQL file
+        sql = read_sql_file(sql_file)
+
+        # Apply templating (always for template command)
+        rendered = _apply_templating(
+            sql,
+            templater_name=templater,
+            cli_vars=var,
+            vars_file=vars_file,
+            config=config,
+            source_path=sql_file,
+        )
+
+        # Write output
+        if output_file:
+            output_file.write_text(rendered, encoding="utf-8")
+            console.print(
+                f"[green]Success:[/green] Rendered SQL written to {output_file}"
+            )
+        else:
+            print(rendered)
+
+    except FileNotFoundError as e:
+        err_console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+
+    except TemplaterError as e:
+        err_console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(1)
 
     except ValueError as e:
@@ -240,6 +461,24 @@ def graph_build(
         "-d",
         help="SQL dialect (default: spark, falls back if not in manifest)",
     ),
+    templater: Optional[str] = typer.Option(
+        None,
+        "--templater",
+        "-t",
+        help="Templater for SQL preprocessing (e.g., 'jinja', 'none')",
+    ),
+    var: Optional[List[str]] = typer.Option(
+        None,
+        "--var",
+        "-v",
+        help="Template variable in key=value format (repeatable)",
+    ),
+    vars_file: Optional[Path] = typer.Option(
+        None,
+        "--vars-file",
+        exists=True,
+        help="Path to variables file (JSON or YAML)",
+    ),
 ) -> None:
     """
     Build a lineage graph from SQL files.
@@ -263,6 +502,9 @@ def graph_build(
 
         # Build with structured node format
         sqlglider graph build query.sql -o graph.json --node-format structured
+
+        # Build with Jinja2 templating
+        sqlglider graph build ./queries/ -o graph.json --templater jinja --var schema=prod
     """
     from sqlglider.graph.builder import GraphBuilder
     from sqlglider.graph.serialization import save_graph
@@ -270,6 +512,7 @@ def graph_build(
     # Load config for defaults
     config = load_config()
     dialect = dialect or config.dialect or "spark"
+    templater = templater or config.templater  # None means no templating
 
     # Validate node format
     if node_format not in ["qualified", "structured"]:
@@ -286,8 +529,43 @@ def graph_build(
         )
         raise typer.Exit(1)
 
+    # Create SQL preprocessor if templating is enabled
+    sql_preprocessor = None
+    if templater:
+        # Load variables once for all files
+        config_vars_file = None
+        config_vars = None
+        if config.templating:
+            if config.templating.variables_file and not vars_file:
+                config_vars_file = Path(config.templating.variables_file)
+                if not config_vars_file.exists():
+                    err_console.print(
+                        f"[yellow]Warning:[/yellow] Variables file from config "
+                        f"not found: {config_vars_file}"
+                    )
+                    config_vars_file = None
+            config_vars = config.templating.variables
+
+        variables = load_all_variables(
+            cli_vars=var,
+            vars_file=vars_file or config_vars_file,
+            config_vars=config_vars,
+            use_env=True,
+        )
+
+        templater_instance = get_templater(templater)
+
+        def sql_preprocessor(sql: str, file_path: Path) -> str:
+            return templater_instance.render(
+                sql, variables=variables, source_path=file_path
+            )
+
     try:
-        builder = GraphBuilder(node_format=node_format, dialect=dialect)
+        builder = GraphBuilder(
+            node_format=node_format,
+            dialect=dialect,
+            sql_preprocessor=sql_preprocessor,
+        )
 
         # Process manifest if provided
         if manifest:
@@ -324,6 +602,10 @@ def graph_build(
 
     except ParseError as e:
         err_console.print(f"[red]Error:[/red] Failed to parse SQL: {e}")
+        raise typer.Exit(1)
+
+    except TemplaterError as e:
+        err_console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(1)
 
     except ValueError as e:

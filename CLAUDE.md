@@ -47,6 +47,7 @@ This project uses `uv` for Python package management. Python 3.11+ is required.
 - **rich**: Terminal formatting and colored output
 - **pydantic**: Data validation and serialization
 - **rustworkx**: High-performance graph library for cross-file lineage
+- **jinja2**: Template engine for SQL preprocessing
 - **ruff**: Fast Python linter and formatter (dev dependency)
 - **pytest**: Testing framework (dev dependency)
 - **pytest-cov**: Coverage plugin for pytest (dev dependency)
@@ -65,6 +66,11 @@ src/sqlglider/
 ├── lineage/
 │   ├── analyzer.py           # Core lineage analysis using SQLGlot
 │   └── formatters.py         # Output formatters (text, JSON, CSV)
+├── templating/
+│   ├── base.py               # Templater base class and NoOpTemplater
+│   ├── jinja.py              # Jinja2 templater implementation
+│   ├── registry.py           # Plugin discovery via entry points
+│   └── variables.py          # Variable loading from multiple sources
 └── utils/
     ├── config.py             # Configuration file loading
     └── file_utils.py         # File I/O utilities
@@ -169,6 +175,59 @@ uv run sqlglider graph query graph.json --upstream orders.total -f json
 uv run sqlglider graph query graph.json --downstream customers.id -f csv
 ```
 
+### SQL Templating
+
+SQL Glider supports Jinja2 templating for SQL files. This allows you to use variables, conditionals, and loops in your SQL before analysis.
+
+```bash
+# Render a SQL template with variables
+uv run sqlglider template query.sql --var schema=analytics --var table=users
+
+# Use a variables file (JSON or YAML)
+uv run sqlglider template query.sql --vars-file vars.json
+
+# Output rendered SQL to file
+uv run sqlglider template query.sql --var schema=prod -o rendered.sql
+
+# List available templaters
+uv run sqlglider template query.sql --list
+
+# Use the no-op templater (pass through unchanged)
+uv run sqlglider template query.sql --templater none
+
+# Lineage analysis with templating
+uv run sqlglider lineage query.sql --templater jinja --var schema=analytics
+
+# Graph build with templating
+uv run sqlglider graph build ./queries/ -o graph.json --templater jinja --var schema=prod
+```
+
+**Template Syntax (Jinja2):**
+```sql
+-- Variables
+SELECT * FROM {{ schema }}.{{ table }}
+
+-- Conditionals
+SELECT
+    customer_id
+    {% if include_total %}, SUM(amount) as total{% endif %}
+FROM orders
+
+-- Loops
+SELECT {% for col in columns %}{{ col }}{% if not loop.last %}, {% endif %}{% endfor %}
+FROM users
+
+-- Includes
+{% include 'common_cte.sql' %}
+SELECT * FROM cte
+```
+
+**Variable Priority (highest to lowest):**
+1. CLI arguments (`--var key=value`)
+2. Variables file (`--vars-file vars.json`)
+3. Config file (`[sqlglider.templating.variables]`)
+4. Environment variables (`SQLGLIDER_VAR_*`)
+
 ## Development Guidelines
 
 ### Code Style
@@ -207,6 +266,8 @@ output_format = "json"
 - `dialect` - SQL dialect (e.g., "postgres", "snowflake", "spark")
 - `level` - Analysis level ("column" or "table")
 - `output_format` - Output format ("text", "json", or "csv")
+- `templater` - Templater for SQL preprocessing ("jinja", "none", or custom)
+- `[sqlglider.templating]` section for template variables and variables file
 
 ### When Making Changes
 1. **Update ARCHITECTURE.md** if you change:

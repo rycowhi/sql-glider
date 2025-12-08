@@ -22,6 +22,28 @@
 # Default: "text"
 # output_format = "json"
 
+# Templater for SQL preprocessing
+# Options: "jinja", "none", or custom registered templaters
+# Default: None (no templating)
+# templater = "jinja"
+
+# ============================================================================
+# Templating Configuration
+# ============================================================================
+
+# The [sqlglider.templating] section configures template variable sources.
+# Variables can come from: CLI args, vars file, config file, or environment.
+# Priority order (highest to lowest): CLI > vars file > config > environment
+
+# [sqlglider.templating]
+# Default variables file (JSON or YAML)
+# variables_file = "vars.json"
+
+# Inline variables (lower priority than file)
+# [sqlglider.templating.variables]
+# schema = "analytics"
+# environment = "production"
+
 # ============================================================================
 # Example Configurations
 # ============================================================================
@@ -41,6 +63,16 @@
 # dialect = "bigquery"
 # output_format = "csv"
 
+# Example 4: Jinja templating with default variables
+# [sqlglider]
+# dialect = "spark"
+# templater = "jinja"
+# [sqlglider.templating]
+# variables_file = "vars.json"
+# [sqlglider.templating.variables]
+# schema = "default_schema"
+# environment = "dev"
+
 # ============================================================================
 # Usage
 # ============================================================================
@@ -55,3 +87,7 @@
 #
 # Without config file:
 #   (Uses defaults: spark dialect, column level, text format)
+#
+# Templating:
+#   uv run sqlglider template query.sql --var schema=analytics --var table=users
+#   uv run sqlglider lineage query.sql --templater jinja --var schema=prod

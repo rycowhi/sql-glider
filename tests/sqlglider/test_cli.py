@@ -1013,3 +1013,227 @@ class TestGraphCommandGroup:
         assert "build" in result.stdout
         assert "merge" in result.stdout
         assert "query" in result.stdout
+
+
+class TestTemplateCommand:
+    """Tests for the template command."""
+
+    def test_template_basic(self):
+        """Test basic template rendering."""
+        with TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            sql_file = tmppath / "query.sql"
+            sql_file.write_text("SELECT * FROM {{ table }}")
+
+            result = runner.invoke(
+                app,
+                ["template", str(sql_file), "--var", "table=users"],
+            )
+
+            assert result.exit_code == 0
+            assert "SELECT * FROM users" in result.stdout
+
+    def test_template_multiple_variables(self):
+        """Test template with multiple variables."""
+        with TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            sql_file = tmppath / "query.sql"
+            sql_file.write_text("SELECT {{ column }} FROM {{ schema }}.{{ table }}")
+
+            result = runner.invoke(
+                app,
+                [
+                    "template",
+                    str(sql_file),
+                    "--var",
+                    "column=id",
+                    "--var",
+                    "schema=public",
+                    "--var",
+                    "table=users",
+                ],
+            )
+
+            assert result.exit_code == 0
+            assert "SELECT id FROM public.users" in result.stdout
+
+    def test_template_with_vars_file(self):
+        """Test template with variables from file."""
+        import json
+
+        with TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            sql_file = tmppath / "query.sql"
+            sql_file.write_text("SELECT * FROM {{ schema }}.{{ table }}")
+
+            vars_file = tmppath / "vars.json"
+            vars_file.write_text(json.dumps({"schema": "analytics", "table": "events"}))
+
+            result = runner.invoke(
+                app,
+                ["template", str(sql_file), "--vars-file", str(vars_file)],
+            )
+
+            assert result.exit_code == 0
+            assert "SELECT * FROM analytics.events" in result.stdout
+
+    def test_template_output_to_file(self):
+        """Test template output written to file."""
+        with TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            sql_file = tmppath / "query.sql"
+            sql_file.write_text("SELECT * FROM {{ table }}")
+            output_file = tmppath / "rendered.sql"
+
+            result = runner.invoke(
+                app,
+                [
+                    "template",
+                    str(sql_file),
+                    "--var",
+                    "table=users",
+                    "-o",
+                    str(output_file),
+                ],
+            )
+
+            assert result.exit_code == 0
+            assert output_file.exists()
+            assert "SELECT * FROM users" in output_file.read_text()
+
+    def test_template_list_templaters(self):
+        """Test listing available templaters."""
+        with TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            sql_file = tmppath / "query.sql"
+            sql_file.write_text("SELECT 1")
+
+            result = runner.invoke(
+                app,
+                ["template", str(sql_file), "--list"],
+            )
+
+            assert result.exit_code == 0
+            assert "jinja" in result.stdout
+            assert "none" in result.stdout
+
+    def test_template_undefined_variable_error(self):
+        """Test error on undefined variable."""
+        with TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            sql_file = tmppath / "query.sql"
+            sql_file.write_text("SELECT * FROM {{ undefined_table }}")
+
+            result = runner.invoke(
+                app,
+                ["template", str(sql_file)],
+            )
+
+            assert result.exit_code == 1
+            assert "undefined" in result.output.lower()
+
+    def test_template_none_templater(self):
+        """Test using 'none' templater (no-op)."""
+        with TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            sql_file = tmppath / "query.sql"
+            sql_file.write_text("SELECT * FROM {{ table }}")
+
+            result = runner.invoke(
+                app,
+                ["template", str(sql_file), "--templater", "none"],
+            )
+
+            assert result.exit_code == 0
+            # Should pass through unchanged
+            assert "{{ table }}" in result.stdout
+
+    def test_template_help(self):
+        """Test template command help."""
+        result = runner.invoke(app, ["template", "--help"])
+
+        assert result.exit_code == 0
+        assert "--templater" in result.stdout
+        assert "--var" in result.stdout
+        assert "--vars-file" in result.stdout
+
+
+class TestLineageWithTemplating:
+    """Tests for lineage command with templating enabled."""
+
+    def test_lineage_with_templater(self):
+        """Test lineage analysis with templating."""
+        with TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            sql_file = tmppath / "query.sql"
+            sql_file.write_text("SELECT customer_id FROM {{ schema }}.customers")
+
+            result = runner.invoke(
+                app,
+                [
+                    "lineage",
+                    str(sql_file),
+                    "--templater",
+                    "jinja",
+                    "--var",
+                    "schema=analytics",
+                ],
+            )
+
+            assert result.exit_code == 0
+            # Should show lineage for templated SQL
+            assert "customer_id" in result.stdout
+
+    def test_lineage_without_templater_preserves_template(self):
+        """Test that lineage without templater treats template syntax as literal."""
+        with TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            sql_file = tmppath / "query.sql"
+            # Simple SQL that doesn't need templating
+            sql_file.write_text("SELECT id FROM users")
+
+            result = runner.invoke(
+                app,
+                ["lineage", str(sql_file)],
+            )
+
+            assert result.exit_code == 0
+            assert "id" in result.stdout
+
+
+class TestGraphBuildWithTemplating:
+    """Tests for graph build command with templating enabled."""
+
+    def test_graph_build_with_templater(self):
+        """Test graph build with templating."""
+        with TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+
+            sql_file = tmppath / "query.sql"
+            sql_file.write_text("SELECT customer_id FROM {{ schema }}.customers")
+
+            output_path = tmppath / "graph.json"
+
+            result = runner.invoke(
+                app,
+                [
+                    "graph",
+                    "build",
+                    str(sql_file),
+                    "-o",
+                    str(output_path),
+                    "--templater",
+                    "jinja",
+                    "--var",
+                    "schema=analytics",
+                ],
+            )
+
+            assert result.exit_code == 0
+            assert output_path.exists()
+
+            # Verify graph contains the templated column
+            import json
+
+            graph_data = json.loads(output_path.read_text())
+            assert graph_data["metadata"]["total_nodes"] > 0
