@@ -1,10 +1,10 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
 
 [project]
 name = "sql-glider"
-version = "0.1.0"
+dynamic = ["version"]
 description = "SQL Utility Toolkit for better understanding, use, and governance of your queries in a native environment."
 readme = "README.md"
 license = "Apache-2.0"
@@ -36,10 +36,19 @@ dependencies = [
 Homepage = "https://github.com/rycowhi/sql-glider/"
 Repository = "https://github.com/rycowhi/sql-glider/"
 Documentation = "https://github.com/rycowhi/sql-glider/"
-Homepage = "https://github.com/rycowhi/sql-glider/issues"
+Issues = "https://github.com/rycowhi/sql-glider/issues"
 
 [project.scripts]
 sqlglider = "sqlglider.cli:app"
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "src/sqlglider/_version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sqlglider"]
 
 [tool.uv]
 package = true
@@ -88,10 +97,10 @@ exclude_lines = [
 ]
 
 # Publishing configuration for uv
-[[tool.uv.index]]
-name = "testpypi"
-url = "https://test.pypi.org/simple/"
-publish-url = "https://test.pypi.org/legacy/"
+# [[tool.uv.index]]
+#name = "testpypi"
+# url = "https://test.pypi.org/simple/"
+# publish-url = "https://test.pypi.org/legacy/"
 
 [[tool.uv.index]]
 name = "pypi"

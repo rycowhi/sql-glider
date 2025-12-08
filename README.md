@@ -437,6 +437,26 @@ src/sqlglider/
 
 SQL Glider is configured for publishing to both TestPyPI and PyPI using `uv`.
 
+### Versioning
+
+SQL Glider uses Git tags for version management via [hatch-vcs](https://github.com/ofek/hatch-vcs). The version is automatically derived from Git:
+
+- **Tagged commits:** Version matches the tag (e.g., `git tag v0.2.0` produces version `0.2.0`)
+- **Untagged commits:** Version includes development info (e.g., `0.1.dev18+g7216a59`)
+
+**Creating a new release:**
+
+```bash
+# Create and push a version tag
+git tag v0.2.0
+git push origin v0.2.0
+
+# Build will now produce version 0.2.0
+uv build
+```
+
+**Tag format:** Use `v` prefix (e.g., `v1.0.0`, `v0.2.1`). The `v` is stripped from the final version number.
+
 ### Building the Package
 
 ```bash
