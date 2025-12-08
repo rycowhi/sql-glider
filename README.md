@@ -10,6 +10,7 @@ SQL Glider provides powerful column-level and table-level lineage analysis for S
 
 - **Forward Lineage:** Trace output columns back to their source tables and columns
 - **Reverse Lineage:** Impact analysis - find which output columns are affected by a source column
+- **Table Extraction:** List all tables in SQL files with usage type (INPUT/OUTPUT) and object type (TABLE/VIEW/CTE)
 - **Multi-level Tracing:** Automatically handles CTEs, subqueries, and complex expressions
 - **Graph-Based Lineage:** Build and query lineage graphs across thousands of SQL files
 - **Multiple Output Formats:** Text (human-readable), JSON (machine-readable), CSV (spreadsheet-ready)
@@ -112,6 +113,45 @@ uv run sqlglider lineage query.sql --output-format json --output-file lineage.js
 # Show which tables are used
 uv run sqlglider lineage query.sql --level table
 ```
+
+### Table Extraction
+
+List all tables involved in SQL files with usage and type information:
+
+```bash
+# List all tables in a SQL file
+uv run sqlglider tables query.sql
+
+# JSON output with detailed table info
+uv run sqlglider tables query.sql --output-format json
+
+# Export to CSV
+uv run sqlglider tables query.sql --output-format csv --output-file tables.csv
+```
+
+**Example Output (JSON):**
+```json
+{
+  "queries": [{
+    "query_index": 0,
+    "tables": [
+      {"name": "customers", "usage": "INPUT", "object_type": "UNKNOWN"},
+      {"name": "orders", "usage": "INPUT", "object_type": "UNKNOWN"}
+    ]
+  }]
+}
+```
+
+**Table Usage Types:**
+- `INPUT`: Table is read from (SELECT, JOIN, subqueries)
+- `OUTPUT`: Table is written to (INSERT, CREATE TABLE/VIEW, UPDATE)
+- `BOTH`: Table is both read from and written to
+
+**Object Types:**
+- `TABLE`: CREATE TABLE or DROP TABLE statement
+- `VIEW`: CREATE VIEW or DROP VIEW statement
+- `CTE`: Common Table Expression (WITH clause)
+- `UNKNOWN`: Cannot determine type from SQL alone
 
 ### Different SQL Dialects
 
@@ -302,6 +342,25 @@ Options:
 **Notes:**
 - `--column` and `--source-column` are mutually exclusive. Use one or the other.
 - `--table` filter is useful for multi-query files to analyze only queries that reference a specific table.
+
+### Tables Command
+
+```
+sqlglider tables <sql_file> [OPTIONS]
+
+Arguments:
+  sql_file                    Path to SQL file to analyze [required]
+
+Options:
+  --dialect, -d               SQL dialect (spark, postgres, snowflake, etc.) [default: spark]
+  --table                     Filter to only queries that reference this table [optional]
+  --output-format, -f         Output format: 'text', 'json', or 'csv' [default: text]
+  --output-file, -o           Write output to file instead of stdout [optional]
+  --templater, -t             Templater for SQL preprocessing (e.g., 'jinja', 'none') [optional]
+  --var, -v                   Template variable in key=value format (repeatable) [optional]
+  --vars-file                 Path to variables file (JSON or YAML) [optional]
+  --help                      Show help message and exit
+```
 
 ### Graph Commands
 

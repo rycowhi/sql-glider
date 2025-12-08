@@ -135,6 +135,38 @@ uv run sqlglider lineage multi_query.sql --level table
 uv run sqlglider lineage multi_query.sql --table orders --source-column orders.customer_id
 ```
 
+### Table Extraction
+
+Extract all tables involved in SQL files with usage and type information:
+
+```bash
+# List all tables in a SQL file
+uv run sqlglider tables query.sql
+
+# JSON output
+uv run sqlglider tables query.sql --output-format json
+
+# CSV output
+uv run sqlglider tables query.sql --output-format csv
+
+# Export to file
+uv run sqlglider tables query.sql --output-format csv --output-file tables.csv
+
+# Different SQL dialect
+uv run sqlglider tables query.sql --dialect postgres
+
+# Filter to queries referencing a specific table (multi-query files)
+uv run sqlglider tables multi_query.sql --table customers
+
+# With templating support
+uv run sqlglider tables query.sql --templater jinja --var schema=analytics
+```
+
+**Output includes:**
+- **Table Name**: Fully qualified table name (e.g., `schema.table`)
+- **Usage**: `INPUT` (read from), `OUTPUT` (written to), or `BOTH`
+- **Object Type**: `TABLE`, `VIEW`, `CTE`, or `UNKNOWN`
+
 ### Graph-Based Lineage (Cross-File Analysis)
 
 ```bash

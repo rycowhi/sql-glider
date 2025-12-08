@@ -1240,3 +1240,318 @@ class TestGraphBuildWithTemplating:
 
             graph_data = json.loads(output_path.read_text())
             assert graph_data["metadata"]["total_nodes"] > 0
+
+
+class TestTablesCommand:
+    """Tests for the tables command."""
+
+    @pytest.fixture
+    def sample_sql_file(self):
+        """Create a temporary SQL file for testing."""
+        sql_content = """
+        SELECT
+            c.customer_id,
+            c.customer_name,
+            o.order_total
+        FROM customers c
+        JOIN orders o ON c.id = o.customer_id;
+        """
+        with NamedTemporaryFile(
+            mode="w", delete=False, suffix=".sql", encoding="utf-8"
+        ) as f:
+            f.write(sql_content)
+            temp_path = Path(f.name)
+
+        yield temp_path
+        temp_path.unlink()
+
+    @pytest.fixture
+    def create_view_sql_file(self):
+        """Create a temporary SQL file with CREATE VIEW."""
+        sql_content = """
+        CREATE VIEW customer_summary AS
+        SELECT
+            customer_id,
+            SUM(amount) as total
+        FROM orders
+        GROUP BY customer_id;
+        """
+        with NamedTemporaryFile(
+            mode="w", delete=False, suffix=".sql", encoding="utf-8"
+        ) as f:
+            f.write(sql_content)
+            temp_path = Path(f.name)
+
+        yield temp_path
+        temp_path.unlink()
+
+    @pytest.fixture
+    def multi_query_sql_file(self):
+        """Create a temporary SQL file with multiple queries."""
+        sql_content = """
+        SELECT * FROM customers;
+        INSERT INTO target_table SELECT * FROM source_table;
+        CREATE VIEW summary AS SELECT * FROM orders;
+        """
+        with NamedTemporaryFile(
+            mode="w", delete=False, suffix=".sql", encoding="utf-8"
+        ) as f:
+            f.write(sql_content)
+            temp_path = Path(f.name)
+
+        yield temp_path
+        temp_path.unlink()
+
+    @pytest.fixture
+    def cte_sql_file(self):
+        """Create a temporary SQL file with CTEs."""
+        sql_content = """
+        WITH order_totals AS (
+            SELECT customer_id, SUM(amount) as total
+            FROM orders
+            GROUP BY customer_id
+        )
+        SELECT c.name, ot.total
+        FROM customers c
+        JOIN order_totals ot ON c.id = ot.customer_id;
+        """
+        with NamedTemporaryFile(
+            mode="w", delete=False, suffix=".sql", encoding="utf-8"
+        ) as f:
+            f.write(sql_content)
+            temp_path = Path(f.name)
+
+        yield temp_path
+        temp_path.unlink()
+
+    def test_tables_basic(self, sample_sql_file):
+        """Test basic tables analysis."""
+        result = runner.invoke(app, ["tables", str(sample_sql_file)])
+
+        assert result.exit_code == 0
+        assert "customers" in result.stdout
+        assert "orders" in result.stdout
+        assert "INPUT" in result.stdout
+        assert "UNKNOWN" in result.stdout
+
+    def test_tables_json_format(self, sample_sql_file):
+        """Test JSON output format."""
+        result = runner.invoke(
+            app, ["tables", str(sample_sql_file), "--output-format", "json"]
+        )
+
+        assert result.exit_code == 0
+        assert "{" in result.stdout
+        assert "queries" in result.stdout
+        assert "tables" in result.stdout
+
+        import json
+
+        data = json.loads(result.stdout)
+        assert len(data["queries"]) == 1
+        assert len(data["queries"][0]["tables"]) == 2
+
+    def test_tables_csv_format(self, sample_sql_file):
+        """Test CSV output format."""
+        result = runner.invoke(
+            app, ["tables", str(sample_sql_file), "--output-format", "csv"]
+        )
+
+        assert result.exit_code == 0
+        assert "query_index,table_name,usage,object_type" in result.stdout
+        assert "customers" in result.stdout
+        assert "orders" in result.stdout
+
+    def test_tables_with_output_file(self, sample_sql_file):
+        """Test writing output to file."""
+        with NamedTemporaryFile(delete=False, suffix=".json") as f:
+            output_file = Path(f.name)
+
+        try:
+            result = runner.invoke(
+                app,
+                [
+                    "tables",
+                    str(sample_sql_file),
+                    "--output-format",
+                    "json",
+                    "--output-file",
+                    str(output_file),
+                ],
+            )
+
+            assert result.exit_code == 0
+            assert output_file.exists()
+            assert "Success" in result.stdout
+
+            import json
+
+            content = json.loads(output_file.read_text())
+            assert "queries" in content
+        finally:
+            output_file.unlink()
+
+    def test_tables_with_dialect(self, sample_sql_file):
+        """Test specifying SQL dialect."""
+        result = runner.invoke(
+            app, ["tables", str(sample_sql_file), "--dialect", "postgres"]
+        )
+
+        assert result.exit_code == 0
+
+    def test_tables_create_view(self, create_view_sql_file):
+        """Test tables command with CREATE VIEW."""
+        result = runner.invoke(
+            app, ["tables", str(create_view_sql_file), "--output-format", "json"]
+        )
+
+        assert result.exit_code == 0
+
+        import json
+
+        data = json.loads(result.stdout)
+        tables = data["queries"][0]["tables"]
+        table_by_name = {t["name"]: t for t in tables}
+
+        assert "customer_summary" in table_by_name
+        assert table_by_name["customer_summary"]["usage"] == "OUTPUT"
+        assert table_by_name["customer_summary"]["object_type"] == "VIEW"
+
+        assert "orders" in table_by_name
+        assert table_by_name["orders"]["usage"] == "INPUT"
+
+    def test_tables_multi_query(self, multi_query_sql_file):
+        """Test tables with multi-query file."""
+        result = runner.invoke(
+            app, ["tables", str(multi_query_sql_file), "--output-format", "json"]
+        )
+
+        assert result.exit_code == 0
+
+        import json
+
+        data = json.loads(result.stdout)
+        assert len(data["queries"]) == 3
+
+        # Query 0: SELECT FROM customers
+        assert data["queries"][0]["query_index"] == 0
+
+        # Query 1: INSERT INTO target_table FROM source_table
+        query1_tables = {t["name"]: t for t in data["queries"][1]["tables"]}
+        assert "target_table" in query1_tables
+        assert query1_tables["target_table"]["usage"] == "OUTPUT"
+
+        # Query 2: CREATE VIEW summary
+        query2_tables = {t["name"]: t for t in data["queries"][2]["tables"]}
+        assert "summary" in query2_tables
+        assert query2_tables["summary"]["object_type"] == "VIEW"
+
+    def test_tables_cte(self, cte_sql_file):
+        """Test tables command with CTEs."""
+        result = runner.invoke(
+            app, ["tables", str(cte_sql_file), "--output-format", "json"]
+        )
+
+        assert result.exit_code == 0
+
+        import json
+
+        data = json.loads(result.stdout)
+        tables = data["queries"][0]["tables"]
+        table_by_name = {t["name"]: t for t in tables}
+
+        assert "order_totals" in table_by_name
+        assert table_by_name["order_totals"]["object_type"] == "CTE"
+
+    def test_tables_with_table_filter(self, multi_query_sql_file):
+        """Test filtering by table name."""
+        result = runner.invoke(
+            app,
+            [
+                "tables",
+                str(multi_query_sql_file),
+                "--table",
+                "orders",
+                "--output-format",
+                "json",
+            ],
+        )
+
+        assert result.exit_code == 0
+
+        import json
+
+        data = json.loads(result.stdout)
+        # Should only include queries that reference 'orders'
+        assert len(data["queries"]) == 1  # Only CREATE VIEW references orders
+
+    def test_tables_file_not_found(self):
+        """Test error handling for non-existent file."""
+        result = runner.invoke(app, ["tables", "/path/that/does/not/exist.sql"])
+
+        assert result.exit_code in [1, 2]
+
+    def test_tables_invalid_output_format(self, sample_sql_file):
+        """Test error handling for invalid output format."""
+        result = runner.invoke(
+            app, ["tables", str(sample_sql_file), "--output-format", "xml"]
+        )
+
+        assert result.exit_code == 1
+        assert "Invalid output format" in result.output
+
+    def test_tables_short_options(self, sample_sql_file):
+        """Test using short option flags."""
+        result = runner.invoke(
+            app,
+            [
+                "tables",
+                str(sample_sql_file),
+                "-d",
+                "spark",
+                "-f",
+                "json",
+            ],
+        )
+
+        assert result.exit_code == 0
+        assert "{" in result.stdout
+
+    def test_tables_help(self):
+        """Test tables command help."""
+        result = runner.invoke(app, ["tables", "--help"])
+
+        assert result.exit_code == 0
+        assert "tables" in result.stdout.lower()
+        assert "--dialect" in result.stdout
+        assert "--output-format" in result.stdout
+        assert "--table" in result.stdout
+
+    def test_tables_with_templating(self):
+        """Test tables command with templating."""
+        with TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            sql_file = tmppath / "query.sql"
+            sql_file.write_text("SELECT * FROM {{ schema }}.customers")
+
+            result = runner.invoke(
+                app,
+                [
+                    "tables",
+                    str(sql_file),
+                    "--templater",
+                    "jinja",
+                    "--var",
+                    "schema=analytics",
+                    "--output-format",
+                    "json",
+                ],
+            )
+
+            assert result.exit_code == 0
+
+            import json
+
+            data = json.loads(result.stdout)
+            tables = data["queries"][0]["tables"]
+            assert any("analytics.customers" in t["name"] for t in tables)

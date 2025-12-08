@@ -92,6 +92,12 @@ sql-glider/
   - Example: `sqlglider lineage query.sql --source-column orders.customer_id`
   - Note: `--column` and `--source-column` are mutually exclusive
 
+**Tables Command:** `sqlglider tables <sql_file>`
+- Lists all tables involved in SQL files with usage and type information
+- Outputs include: table name (fully qualified), usage (INPUT/OUTPUT/BOTH), object type (TABLE/VIEW/CTE/UNKNOWN)
+- Supports all standard options: `--dialect`, `--output-format`, `--output-file`, `--templater`, `--var`, `--vars-file`
+- Example: `sqlglider tables query.sql --output-format json`
+
 **Error Handling:**
 - File not found errors
 - SQL parsing errors

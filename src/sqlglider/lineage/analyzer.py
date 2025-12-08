@@ -1,11 +1,48 @@
 """Core lineage analysis using SQLGlot."""
 
+from enum import Enum
 from typing import Callable, Iterator, Literal, List, Optional, Set, Tuple
 
 from pydantic import BaseModel, Field
 from sqlglot import exp, parse
 from sqlglot.errors import ParseError
 from sqlglot.lineage import Node, lineage
+
+
+class TableUsage(str, Enum):
+    """How a table is used in a query."""
+
+    INPUT = "INPUT"
+    OUTPUT = "OUTPUT"
+    BOTH = "BOTH"
+
+
+class ObjectType(str, Enum):
+    """Type of database object."""
+
+    TABLE = "TABLE"
+    VIEW = "VIEW"
+    CTE = "CTE"
+    UNKNOWN = "UNKNOWN"
+
+
+class TableInfo(BaseModel):
+    """Information about a table referenced in a query."""
+
+    name: str = Field(..., description="Fully qualified table name")
+    usage: TableUsage = Field(
+        ..., description="How the table is used (INPUT, OUTPUT, BOTH)"
+    )
+    object_type: ObjectType = Field(
+        ..., description="Type of object (TABLE, VIEW, CTE, UNKNOWN)"
+    )
+
+
+class QueryTablesResult(BaseModel):
+    """Result of table analysis for a single query."""
+
+    metadata: "QueryMetadata"
+    tables: List[TableInfo] = Field(default_factory=list)
 
 
 class LineageItem(BaseModel):
@@ -304,6 +341,273 @@ class LineageAnalyzer:
                 )
 
         return results
+
+    def analyze_tables(
+        self,
+        table_filter: Optional[str] = None,
+    ) -> List[QueryTablesResult]:
+        """
+        Analyze all tables involved in SQL queries.
+
+        This method extracts information about all tables referenced in the SQL,
+        including their usage (INPUT, OUTPUT, or BOTH) and object type (TABLE, VIEW,
+        CTE, or UNKNOWN).
+
+        Args:
+            table_filter: Filter queries to those referencing this table
+
+        Returns:
+            List of QueryTablesResult objects (one per query that matches filters)
+
+        Examples:
+            # Get all tables from SQL
+            results = analyzer.analyze_tables()
+
+            # Filter by table (multi-query files)
+            results = analyzer.analyze_tables(table_filter="customers")
+        """
+        results = []
+
+        for query_index, expr, preview in self._iterate_queries(table_filter):
+            # Temporarily swap self.expr to analyze this query
+            original_expr = self.expr
+            self.expr = expr
+
+            try:
+                tables = self._extract_tables_from_query()
+
+                # Create query result
+                results.append(
+                    QueryTablesResult(
+                        metadata=QueryMetadata(
+                            query_index=query_index,
+                            query_preview=preview,
+                        ),
+                        tables=tables,
+                    )
+                )
+            finally:
+                # Restore original expression
+                self.expr = original_expr
+
+        return results
+
+    def _extract_tables_from_query(self) -> List[TableInfo]:
+        """
+        Extract all tables from the current query with usage and type information.
+
+        Returns:
+            List of TableInfo objects for all tables in the query.
+        """
+        # Track tables by name to consolidate INPUT/OUTPUT into BOTH
+        tables_dict: dict[str, TableInfo] = {}
+
+        # Extract CTEs first (they're INPUT only)
+        cte_names = self._extract_cte_names()
+        for cte_name in cte_names:
+            tables_dict[cte_name] = TableInfo(
+                name=cte_name,
+                usage=TableUsage.INPUT,
+                object_type=ObjectType.CTE,
+            )
+
+        # Determine target table and its type based on statement type
+        target_table, target_type = self._get_target_table_info()
+
+        # Get all table references in the query (except CTEs)
+        input_tables = self._get_all_input_tables(cte_names)
+
+        # Add target table as OUTPUT
+        if target_table:
+            if target_table in tables_dict:
+                # Table is both input and output (e.g., UPDATE with self-reference)
+                tables_dict[target_table] = TableInfo(
+                    name=target_table,
+                    usage=TableUsage.BOTH,
+                    object_type=target_type,
+                )
+            else:
+                tables_dict[target_table] = TableInfo(
+                    name=target_table,
+                    usage=TableUsage.OUTPUT,
+                    object_type=target_type,
+                )
+
+        # Add input tables
+        for table_name in input_tables:
+            if table_name in tables_dict:
+                # Already exists - might need to upgrade to BOTH
+                existing = tables_dict[table_name]
+                if existing.usage == TableUsage.OUTPUT:
+                    tables_dict[table_name] = TableInfo(
+                        name=table_name,
+                        usage=TableUsage.BOTH,
+                        object_type=existing.object_type,
+                    )
+                # If INPUT or BOTH, keep as-is
+            else:
+                tables_dict[table_name] = TableInfo(
+                    name=table_name,
+                    usage=TableUsage.INPUT,
+                    object_type=ObjectType.UNKNOWN,
+                )
+
+        # Return sorted list by name for consistent output
+        return sorted(tables_dict.values(), key=lambda t: t.name.lower())
+
+    def _extract_cte_names(self) -> Set[str]:
+        """
+        Extract all CTE (Common Table Expression) names from the query.
+
+        Returns:
+            Set of CTE names defined in the WITH clause.
+        """
+        cte_names: Set[str] = set()
+
+        # Look for WITH clause
+        if hasattr(self.expr, "args") and self.expr.args.get("with"):
+            with_clause = self.expr.args["with"]
+            for cte in with_clause.expressions:
+                if isinstance(cte, exp.CTE) and cte.alias:
+                    cte_names.add(cte.alias)
+
+        return cte_names
+
+    def _get_target_table_info(self) -> Tuple[Optional[str], ObjectType]:
+        """
+        Get the target table name and its object type for DML/DDL statements.
+
+        Returns:
+            Tuple of (target_table_name, object_type) or (None, UNKNOWN) for SELECT.
+        """
+        # INSERT INTO table
+        if isinstance(self.expr, exp.Insert):
+            target = self.expr.this
+            if isinstance(target, exp.Table):
+                return (self._get_qualified_table_name(target), ObjectType.UNKNOWN)
+
+        # CREATE TABLE / CREATE VIEW
+        elif isinstance(self.expr, exp.Create):
+            kind = getattr(self.expr, "kind", "").upper()
+            target = self.expr.this
+
+            # Handle Schema wrapper (CREATE TABLE with columns)
+            if isinstance(target, exp.Schema):
+                target = target.this
+
+            if isinstance(target, exp.Table):
+                table_name = self._get_qualified_table_name(target)
+                if kind == "VIEW":
+                    return (table_name, ObjectType.VIEW)
+                elif kind == "TABLE":
+                    return (table_name, ObjectType.TABLE)
+                else:
+                    return (table_name, ObjectType.UNKNOWN)
+
+        # UPDATE table
+        elif isinstance(self.expr, exp.Update):
+            target = self.expr.this
+            if isinstance(target, exp.Table):
+                return (self._get_qualified_table_name(target), ObjectType.UNKNOWN)
+
+        # MERGE INTO table
+        elif isinstance(self.expr, exp.Merge):
+            target = self.expr.this
+            if isinstance(target, exp.Table):
+                return (self._get_qualified_table_name(target), ObjectType.UNKNOWN)
+
+        # DELETE FROM table
+        elif isinstance(self.expr, exp.Delete):
+            target = self.expr.this
+            if isinstance(target, exp.Table):
+                return (self._get_qualified_table_name(target), ObjectType.UNKNOWN)
+
+        # DROP TABLE / DROP VIEW
+        elif isinstance(self.expr, exp.Drop):
+            kind = getattr(self.expr, "kind", "").upper()
+            target = self.expr.this
+            if isinstance(target, exp.Table):
+                table_name = self._get_qualified_table_name(target)
+                if kind == "VIEW":
+                    return (table_name, ObjectType.VIEW)
+                elif kind == "TABLE":
+                    return (table_name, ObjectType.TABLE)
+                else:
+                    return (table_name, ObjectType.UNKNOWN)
+
+        # SELECT (no target table)
+        return (None, ObjectType.UNKNOWN)
+
+    def _get_all_input_tables(self, exclude_ctes: Set[str]) -> Set[str]:
+        """
+        Get all tables used as input (FROM, JOIN, subqueries, etc.).
+
+        Args:
+            exclude_ctes: Set of CTE names to exclude from results.
+
+        Returns:
+            Set of fully qualified table names that are used as input.
+        """
+        input_tables: Set[str] = set()
+
+        # Find all Table nodes in the expression tree
+        for table_node in self.expr.find_all(exp.Table):
+            table_name = self._get_qualified_table_name(table_node)
+
+            # Skip CTEs (they're tracked separately)
+            if table_name in exclude_ctes:
+                continue
+
+            # Skip the target table for certain statement types
+            # (it will be added separately as OUTPUT)
+            if self._is_target_table(table_node):
+                continue
+
+            input_tables.add(table_name)
+
+        return input_tables
+
+    def _is_target_table(self, table_node: exp.Table) -> bool:
+        """
+        Check if a table node is the target of a DML/DDL statement.
+
+        This helps distinguish the target table (OUTPUT) from source tables (INPUT)
+        in statements like INSERT, UPDATE, MERGE, DELETE.
+
+        Args:
+            table_node: The table node to check.
+
+        Returns:
+            True if this is the target table, False otherwise.
+        """
+        # For INSERT, the target is self.expr.this
+        if isinstance(self.expr, exp.Insert):
+            return table_node is self.expr.this
+
+        # For UPDATE, the target is self.expr.this
+        elif isinstance(self.expr, exp.Update):
+            return table_node is self.expr.this
+
+        # For MERGE, the target is self.expr.this
+        elif isinstance(self.expr, exp.Merge):
+            return table_node is self.expr.this
+
+        # For DELETE, the target is self.expr.this
+        elif isinstance(self.expr, exp.Delete):
+            return table_node is self.expr.this
+
+        # For CREATE TABLE/VIEW, check if it's in the schema
+        elif isinstance(self.expr, exp.Create):
+            target = self.expr.this
+            if isinstance(target, exp.Schema):
+                return table_node is target.this
+            return table_node is target
+
+        # For DROP, the target is self.expr.this
+        elif isinstance(self.expr, exp.Drop):
+            return table_node is self.expr.this
+
+        return False
 
     def _analyze_column_lineage_internal(
         self, column: Optional[str] = None

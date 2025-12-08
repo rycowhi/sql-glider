@@ -10,7 +10,7 @@ from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 
-from sqlglider.lineage.analyzer import QueryLineageResult
+from sqlglider.lineage.analyzer import QueryLineageResult, QueryTablesResult
 
 
 class TextFormatter:
@@ -198,3 +198,138 @@ class OutputWriter:
             output_file.write_text(content, encoding="utf-8")
         else:
             print(content)
+
+
+class TableTextFormatter:
+    """Format table analysis results as Rich tables for terminal display."""
+
+    @staticmethod
+    def format(results: List[QueryTablesResult], console: Console) -> None:
+        """
+        Format and print table analysis results as Rich tables.
+
+        Creates a styled table for each query showing table names, usage, and types.
+
+        Args:
+            results: List of QueryTablesResult objects
+            console: Rich Console instance for output
+        """
+        if not results:
+            console.print("[yellow]No tables found.[/yellow]")
+            return
+
+        for i, result in enumerate(results):
+            # Add spacing between tables (except for first)
+            if i > 0:
+                console.print()
+
+            # Create table with query info as title
+            title = (
+                f"Query {result.metadata.query_index}: {result.metadata.query_preview}"
+            )
+            table = Table(title=title, title_style="bold")
+
+            table.add_column("Table Name", style="cyan")
+            table.add_column("Usage", style="green")
+            table.add_column("Type", style="yellow")
+
+            # Add rows
+            for table_info in result.tables:
+                table.add_row(
+                    table_info.name,
+                    table_info.usage.value,
+                    table_info.object_type.value,
+                )
+
+            console.print(table)
+            console.print(f"[dim]Total: {len(result.tables)} table(s)[/dim]")
+
+
+class TableJsonFormatter:
+    """Format table analysis results as JSON."""
+
+    @staticmethod
+    def format(results: List[QueryTablesResult]) -> str:
+        """
+        Format table analysis results as JSON.
+
+        Output format:
+        {
+          "queries": [
+            {
+              "query_index": 0,
+              "query_preview": "SELECT ...",
+              "tables": [
+                {"name": "schema.table", "usage": "INPUT", "object_type": "UNKNOWN"}
+              ]
+            }
+          ]
+        }
+
+        Args:
+            results: List of QueryTablesResult objects
+
+        Returns:
+            JSON-formatted string
+        """
+        queries = []
+        for result in results:
+            query_data = {
+                "query_index": result.metadata.query_index,
+                "query_preview": result.metadata.query_preview,
+                "tables": [
+                    {
+                        "name": table_info.name,
+                        "usage": table_info.usage.value,
+                        "object_type": table_info.object_type.value,
+                    }
+                    for table_info in result.tables
+                ],
+            }
+            queries.append(query_data)
+
+        return json.dumps({"queries": queries}, indent=2)
+
+
+class TableCsvFormatter:
+    """Format table analysis results as CSV."""
+
+    @staticmethod
+    def format(results: List[QueryTablesResult]) -> str:
+        """
+        Format table analysis results as CSV.
+
+        Output format:
+        query_index,table_name,usage,object_type
+        0,schema.table,INPUT,UNKNOWN
+        0,schema.other_table,OUTPUT,TABLE
+
+        Args:
+            results: List of QueryTablesResult objects
+
+        Returns:
+            CSV-formatted string
+        """
+        if not results:
+            return ""
+
+        output = StringIO()
+        headers = ["query_index", "table_name", "usage", "object_type"]
+
+        writer = csv.writer(output)
+        writer.writerow(headers)
+
+        # Write data rows
+        for result in results:
+            query_index = result.metadata.query_index
+            for table_info in result.tables:
+                writer.writerow(
+                    [
+                        query_index,
+                        table_info.name,
+                        table_info.usage.value,
+                        table_info.object_type.value,
+                    ]
+                )
+
+        return output.getvalue()

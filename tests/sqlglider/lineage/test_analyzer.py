@@ -1416,7 +1416,9 @@ class TestSkippedQueries:
         for sql, expected_contains in test_cases:
             analyzer = LineageAnalyzer(sql, dialect="spark")
             stmt_type = analyzer._get_statement_type()
-            assert expected_contains in stmt_type, f"Expected '{expected_contains}' in '{stmt_type}' for: {sql}"
+            assert expected_contains in stmt_type, (
+                f"Expected '{expected_contains}' in '{stmt_type}' for: {sql}"
+            )
 
     def test_mixed_statements_preserves_order(self):
         """Test that query indices are preserved correctly when some are skipped."""
@@ -1446,3 +1448,351 @@ class TestSkippedQueries:
         assert skipped[0].query_index == 0  # DROP
         assert skipped[1].query_index == 2  # TRUNCATE
         assert skipped[2].query_index == 6  # DELETE
+
+
+class TestAnalyzeTables:
+    """Tests for the analyze_tables() method."""
+
+    def test_simple_select(self):
+        """Test basic SELECT with single table."""
+        sql = "SELECT customer_id, customer_name FROM customers"
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_tables()
+
+        assert len(results) == 1
+        assert len(results[0].tables) == 1
+        assert results[0].tables[0].name == "customers"
+        assert results[0].tables[0].usage.value == "INPUT"
+        assert results[0].tables[0].object_type.value == "UNKNOWN"
+
+    def test_select_with_join(self):
+        """Test SELECT with JOIN - multiple input tables."""
+        sql = """
+        SELECT c.customer_id, o.order_id
+        FROM customers c
+        JOIN orders o ON c.id = o.customer_id
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_tables()
+
+        assert len(results) == 1
+        assert len(results[0].tables) == 2
+        table_names = {t.name for t in results[0].tables}
+        assert "customers" in table_names
+        assert "orders" in table_names
+        # All should be INPUT
+        for table in results[0].tables:
+            assert table.usage.value == "INPUT"
+            assert table.object_type.value == "UNKNOWN"
+
+    def test_create_table_as_select(self):
+        """Test CREATE TABLE AS SELECT - OUTPUT table with INPUT sources."""
+        sql = """
+        CREATE TABLE new_customers AS
+        SELECT customer_id, customer_name
+        FROM customers
+        WHERE active = true
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_tables()
+
+        assert len(results) == 1
+        assert len(results[0].tables) == 2
+
+        # Find tables by name
+        tables_by_name = {t.name: t for t in results[0].tables}
+
+        # new_customers should be OUTPUT with type TABLE
+        assert "new_customers" in tables_by_name
+        assert tables_by_name["new_customers"].usage.value == "OUTPUT"
+        assert tables_by_name["new_customers"].object_type.value == "TABLE"
+
+        # customers should be INPUT
+        assert "customers" in tables_by_name
+        assert tables_by_name["customers"].usage.value == "INPUT"
+        assert tables_by_name["customers"].object_type.value == "UNKNOWN"
+
+    def test_create_view(self):
+        """Test CREATE VIEW - OUTPUT view with INPUT sources."""
+        sql = """
+        CREATE VIEW customer_summary AS
+        SELECT customer_id, SUM(amount) as total
+        FROM orders
+        GROUP BY customer_id
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_tables()
+
+        assert len(results) == 1
+        assert len(results[0].tables) == 2
+
+        tables_by_name = {t.name: t for t in results[0].tables}
+
+        # customer_summary should be OUTPUT with type VIEW
+        assert "customer_summary" in tables_by_name
+        assert tables_by_name["customer_summary"].usage.value == "OUTPUT"
+        assert tables_by_name["customer_summary"].object_type.value == "VIEW"
+
+        # orders should be INPUT
+        assert "orders" in tables_by_name
+        assert tables_by_name["orders"].usage.value == "INPUT"
+
+    def test_insert_into_select(self):
+        """Test INSERT INTO SELECT - OUTPUT table with INPUT sources."""
+        sql = """
+        INSERT INTO target_table
+        SELECT customer_id, customer_name
+        FROM source_table
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_tables()
+
+        assert len(results) == 1
+        assert len(results[0].tables) == 2
+
+        tables_by_name = {t.name: t for t in results[0].tables}
+
+        # target_table should be OUTPUT
+        assert "target_table" in tables_by_name
+        assert tables_by_name["target_table"].usage.value == "OUTPUT"
+        assert tables_by_name["target_table"].object_type.value == "UNKNOWN"
+
+        # source_table should be INPUT
+        assert "source_table" in tables_by_name
+        assert tables_by_name["source_table"].usage.value == "INPUT"
+
+    def test_cte_detection(self):
+        """Test that CTEs are detected with CTE object type."""
+        sql = """
+        WITH order_totals AS (
+            SELECT customer_id, SUM(amount) as total
+            FROM orders
+            GROUP BY customer_id
+        )
+        SELECT c.customer_name, ot.total
+        FROM customers c
+        JOIN order_totals ot ON c.id = ot.customer_id
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_tables()
+
+        assert len(results) == 1
+        assert len(results[0].tables) == 3
+
+        tables_by_name = {t.name: t for t in results[0].tables}
+
+        # order_totals should be CTE
+        assert "order_totals" in tables_by_name
+        assert tables_by_name["order_totals"].usage.value == "INPUT"
+        assert tables_by_name["order_totals"].object_type.value == "CTE"
+
+        # customers and orders should be UNKNOWN type
+        assert tables_by_name["customers"].object_type.value == "UNKNOWN"
+        assert tables_by_name["orders"].object_type.value == "UNKNOWN"
+
+    def test_qualified_table_names(self):
+        """Test that fully qualified table names are preserved."""
+        sql = """
+        SELECT c.id, o.total
+        FROM analytics.customers c
+        JOIN sales.orders o ON c.id = o.customer_id
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_tables()
+
+        assert len(results) == 1
+        table_names = {t.name for t in results[0].tables}
+        assert "analytics.customers" in table_names
+        assert "sales.orders" in table_names
+
+    def test_multi_query_file(self):
+        """Test multi-query file returns results per query."""
+        sql = """
+        SELECT * FROM table1;
+        SELECT * FROM table2;
+        INSERT INTO target SELECT * FROM source;
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_tables()
+
+        assert len(results) == 3
+
+        # Query 0
+        assert results[0].metadata.query_index == 0
+        assert len(results[0].tables) == 1
+        assert results[0].tables[0].name == "table1"
+
+        # Query 1
+        assert results[1].metadata.query_index == 1
+        assert len(results[1].tables) == 1
+        assert results[1].tables[0].name == "table2"
+
+        # Query 2 - INSERT
+        assert results[2].metadata.query_index == 2
+        table_names = {t.name for t in results[2].tables}
+        assert "target" in table_names
+        assert "source" in table_names
+
+    def test_table_filter(self):
+        """Test filtering by table name."""
+        sql = """
+        SELECT * FROM customers;
+        SELECT * FROM orders;
+        SELECT * FROM products;
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_tables(table_filter="orders")
+
+        assert len(results) == 1
+        assert results[0].metadata.query_index == 1
+        assert results[0].tables[0].name == "orders"
+
+    def test_table_filter_case_insensitive(self):
+        """Test that table filter is case-insensitive."""
+        sql = "SELECT * FROM Customers"
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+
+        results_lower = analyzer.analyze_tables(table_filter="customers")
+        results_upper = analyzer.analyze_tables(table_filter="CUSTOMERS")
+        results_mixed = analyzer.analyze_tables(table_filter="CuStOmErS")
+
+        assert len(results_lower) == 1
+        assert len(results_upper) == 1
+        assert len(results_mixed) == 1
+
+    def test_subquery_tables(self):
+        """Test that tables in subqueries are included."""
+        sql = """
+        SELECT *
+        FROM orders
+        WHERE customer_id IN (SELECT id FROM customers)
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_tables()
+
+        assert len(results) == 1
+        table_names = {t.name for t in results[0].tables}
+        assert "orders" in table_names
+        assert "customers" in table_names
+
+    def test_update_statement(self):
+        """Test UPDATE statement - target is OUTPUT, sources are INPUT."""
+        sql = """
+        UPDATE target_table t
+        SET t.status = s.new_status
+        FROM source_table s
+        WHERE t.id = s.target_id
+        """
+        analyzer = LineageAnalyzer(sql, dialect="postgres")
+        results = analyzer.analyze_tables()
+
+        assert len(results) == 1
+        tables_by_name = {t.name: t for t in results[0].tables}
+
+        # target_table should be OUTPUT
+        assert "target_table" in tables_by_name
+        assert tables_by_name["target_table"].usage.value == "OUTPUT"
+
+        # source_table should be INPUT
+        assert "source_table" in tables_by_name
+        assert tables_by_name["source_table"].usage.value == "INPUT"
+
+    def test_delete_statement(self):
+        """Test DELETE statement - target is OUTPUT."""
+        sql = "DELETE FROM old_records WHERE created_at < '2020-01-01'"
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_tables()
+
+        assert len(results) == 1
+        assert len(results[0].tables) == 1
+        assert results[0].tables[0].name == "old_records"
+        assert results[0].tables[0].usage.value == "OUTPUT"
+        assert results[0].tables[0].object_type.value == "UNKNOWN"
+
+    def test_drop_table(self):
+        """Test DROP TABLE statement."""
+        sql = "DROP TABLE old_data"
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_tables()
+
+        assert len(results) == 1
+        assert len(results[0].tables) == 1
+        assert results[0].tables[0].name == "old_data"
+        assert results[0].tables[0].usage.value == "OUTPUT"
+        assert results[0].tables[0].object_type.value == "TABLE"
+
+    def test_drop_view(self):
+        """Test DROP VIEW statement."""
+        sql = "DROP VIEW old_view"
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_tables()
+
+        assert len(results) == 1
+        assert len(results[0].tables) == 1
+        assert results[0].tables[0].name == "old_view"
+        assert results[0].tables[0].usage.value == "OUTPUT"
+        assert results[0].tables[0].object_type.value == "VIEW"
+
+    def test_table_both_input_and_output(self):
+        """Test table that appears as both INPUT and OUTPUT gets BOTH usage."""
+        sql = """
+        INSERT INTO customers
+        SELECT * FROM customers WHERE active = false
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_tables()
+
+        assert len(results) == 1
+        assert len(results[0].tables) == 1
+        assert results[0].tables[0].name == "customers"
+        assert results[0].tables[0].usage.value == "BOTH"
+
+    def test_empty_result_for_no_tables(self):
+        """Test query with no tables returns empty list."""
+        sql = "SELECT 1 + 1 AS result"
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_tables()
+
+        assert len(results) == 1
+        assert len(results[0].tables) == 0
+
+    def test_tables_sorted_by_name(self):
+        """Test that tables are returned sorted alphabetically."""
+        sql = """
+        SELECT *
+        FROM zebra z
+        JOIN alpha a ON z.id = a.id
+        JOIN middle m ON a.id = m.id
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_tables()
+
+        assert len(results) == 1
+        table_names = [t.name for t in results[0].tables]
+        assert table_names == sorted(table_names, key=str.lower)
+
+    def test_multiple_ctes(self):
+        """Test query with multiple CTEs."""
+        sql = """
+        WITH cte1 AS (SELECT id FROM table1),
+             cte2 AS (SELECT id FROM table2),
+             cte3 AS (SELECT id FROM cte1 JOIN cte2 ON cte1.id = cte2.id)
+        SELECT * FROM cte3
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_tables()
+
+        assert len(results) == 1
+        tables_by_name = {t.name: t for t in results[0].tables}
+
+        # All CTEs should be detected
+        assert "cte1" in tables_by_name
+        assert "cte2" in tables_by_name
+        assert "cte3" in tables_by_name
+        assert tables_by_name["cte1"].object_type.value == "CTE"
+        assert tables_by_name["cte2"].object_type.value == "CTE"
+        assert tables_by_name["cte3"].object_type.value == "CTE"
+
+        # Base tables should also be detected
+        assert "table1" in tables_by_name
+        assert "table2" in tables_by_name
