@@ -1023,14 +1023,48 @@ class LineageAnalyzer:
         """
         if not node.downstream:
             # Leaf node - this is a source column
-            # SQLGlot's lineage provides qualified names, but may use aliases
-            # Need to resolve aliases to actual table names
-            qualified_name = self._resolve_source_column_alias(node.name)
-            sources.add(qualified_name)
+            # Check if this is a literal value (SQLGlot uses position numbers for literals)
+            if node.name.isdigit():
+                # This is a literal - extract the actual value from the expression
+                literal_repr = self._extract_literal_representation(node)
+                sources.add(literal_repr)
+            else:
+                # SQLGlot's lineage provides qualified names, but may use aliases
+                # Need to resolve aliases to actual table names
+                qualified_name = self._resolve_source_column_alias(node.name)
+                sources.add(qualified_name)
         else:
             # Traverse deeper into the tree
             for child in node.downstream:
                 self._collect_source_columns(child, sources)
+
+    def _extract_literal_representation(self, node: Node) -> str:
+        """
+        Extract a human-readable representation of a literal value from a lineage node.
+
+        When SQLGlot encounters a literal value in a UNION branch, it returns the
+        column position as the node name. This method extracts the actual literal
+        value from the node's expression.
+
+        Args:
+            node: A lineage node where node.name is a digit (position number)
+
+        Returns:
+            A string like "<literal: NULL>" or "<literal: 'value'>" or "<literal: 0>"
+        """
+        try:
+            expr = node.expression
+            # The expression is typically an Alias wrapping the actual value
+            if isinstance(expr, exp.Alias):
+                literal_expr = expr.this
+                literal_sql = literal_expr.sql(dialect=self.dialect)
+                return f"<literal: {literal_sql}>"
+            else:
+                # Fallback: use the expression's SQL representation
+                return f"<literal: {expr.sql(dialect=self.dialect)}>"
+        except Exception:
+            # If extraction fails, return a generic literal marker
+            return "<literal>"
 
     def _get_query_tables(self) -> List[str]:
         """

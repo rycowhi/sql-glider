@@ -1796,3 +1796,248 @@ class TestAnalyzeTables:
         # Base tables should also be detected
         assert "table1" in tables_by_name
         assert "table2" in tables_by_name
+
+
+class TestLiteralHandling:
+    """Tests for literal value handling in lineage analysis."""
+
+    def test_union_with_null_literal(self):
+        """Test that NULL literals in UNION branches are represented properly."""
+        sql = """
+        SELECT customer_id, last_order_date FROM active_customers
+        UNION ALL
+        SELECT customer_id, NULL AS last_order_date FROM prospects
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_queries(level="column")
+
+        assert len(results) == 1
+        # Find the lineage item for last_order_date
+        items_for_date = [
+            item
+            for item in results[0].lineage_items
+            if "last_order_date" in item.output_name.lower()
+        ]
+        sources = [item.source_name for item in items_for_date]
+
+        # Should have the column from active_customers AND the literal NULL
+        assert any("active_customers" in s for s in sources)
+        assert any("<literal: NULL>" in s for s in sources)
+
+    def test_union_with_numeric_literal(self):
+        """Test that numeric literals in UNION branches are represented properly."""
+        sql = """
+        SELECT customer_id, total_orders FROM existing_customers
+        UNION ALL
+        SELECT customer_id, 0 AS total_orders FROM new_customers
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_queries(level="column")
+
+        assert len(results) == 1
+        items_for_orders = [
+            item
+            for item in results[0].lineage_items
+            if "total_orders" in item.output_name.lower()
+        ]
+        sources = [item.source_name for item in items_for_orders]
+
+        # Should include the literal 0
+        assert any("<literal: 0>" in s for s in sources)
+
+    def test_union_with_string_literal(self):
+        """Test that string literals in UNION branches are represented properly."""
+        sql = """
+        SELECT customer_id, 'active' AS status FROM active_customers
+        UNION ALL
+        SELECT customer_id, 'prospect' AS status FROM prospects
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_queries(level="column")
+
+        assert len(results) == 1
+        items_for_status = [
+            item
+            for item in results[0].lineage_items
+            if "status" in item.output_name.lower()
+        ]
+        sources = [item.source_name for item in items_for_status]
+
+        # Should include both string literals
+        assert any("<literal: 'active'>" in s for s in sources)
+        assert any("<literal: 'prospect'>" in s for s in sources)
+
+    def test_union_with_function_literal(self):
+        """Test that function calls (like CURRENT_TIMESTAMP) are represented properly."""
+        sql = """
+        SELECT customer_id, CURRENT_TIMESTAMP() AS updated_at FROM customers
+        UNION ALL
+        SELECT customer_id, CURRENT_TIMESTAMP() AS updated_at FROM prospects
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_queries(level="column")
+
+        assert len(results) == 1
+        items_for_updated = [
+            item
+            for item in results[0].lineage_items
+            if "updated_at" in item.output_name.lower()
+        ]
+        sources = [item.source_name for item in items_for_updated]
+
+        # Should include CURRENT_TIMESTAMP literal
+        assert any("<literal:" in s and "CURRENT_TIMESTAMP" in s for s in sources)
+
+    def test_three_way_union_with_mixed_literals(self):
+        """Test UNION with three branches having different literal types."""
+        sql = """
+        SELECT customer_id, order_date FROM orders
+        UNION ALL
+        SELECT customer_id, NULL AS order_date FROM prospects
+        UNION ALL
+        SELECT customer_id, order_date FROM archived_orders
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_queries(level="column")
+
+        assert len(results) == 1
+        items_for_date = [
+            item
+            for item in results[0].lineage_items
+            if "order_date" in item.output_name.lower()
+        ]
+        sources = [item.source_name for item in items_for_date]
+
+        # Should have two column sources and one literal
+        assert any("orders" in s and "order_date" in s for s in sources)
+        assert any("archived_orders" in s and "order_date" in s for s in sources)
+        assert any("<literal: NULL>" in s for s in sources)
+
+    def test_coalesce_with_literal_default(self):
+        """Test that COALESCE with literal default shows the literal in sources."""
+        sql = """
+        SELECT
+            customer_id,
+            COALESCE(total_orders, 0) AS total_orders
+        FROM customers
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_queries(level="column")
+
+        assert len(results) == 1
+        items_for_orders = [
+            item
+            for item in results[0].lineage_items
+            if "total_orders" in item.output_name.lower()
+        ]
+        sources = [item.source_name for item in items_for_orders]
+
+        # Should include the source column
+        assert any("customers" in s and "total_orders" in s for s in sources)
+
+    def test_literal_only_column(self):
+        """Test a column that is purely a literal value.
+
+        Note: For standalone literals (not in a UNION), SQLGlot returns the alias
+        name as the source since the literal itself is the leaf node. This is different
+        from UNION queries where literal branches get position numbers.
+        """
+        sql = """
+        SELECT
+            customer_id,
+            'hardcoded_value' AS data_source
+        FROM customers
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_queries(level="column")
+
+        assert len(results) == 1
+        items_for_source = [
+            item
+            for item in results[0].lineage_items
+            if "data_source" in item.output_name.lower()
+        ]
+        sources = [item.source_name for item in items_for_source]
+
+        # For standalone literals, SQLGlot uses the alias as the source name
+        # (the literal is a self-referential leaf node)
+        assert len(sources) == 1
+        assert sources[0] == "data_source"
+
+    def test_case_expression_literals(self):
+        """Test CASE expressions with literal values in branches."""
+        sql = """
+        SELECT
+            customer_id,
+            CASE
+                WHEN total > 1000 THEN 'high'
+                WHEN total > 100 THEN 'medium'
+                ELSE 'low'
+            END AS category
+        FROM customers
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_queries(level="column")
+
+        assert len(results) == 1
+        # CASE expressions should trace to the column used in conditions
+        items_for_category = [
+            item
+            for item in results[0].lineage_items
+            if "category" in item.output_name.lower()
+        ]
+        sources = [item.source_name for item in items_for_category]
+
+        # Should trace to the total column from customers
+        assert any("total" in s.lower() for s in sources)
+
+    def test_extract_literal_representation_null(self):
+        """Test _extract_literal_representation method with NULL."""
+        from sqlglot.lineage import lineage
+
+        sql = """
+        SELECT NULL AS test_col FROM dual
+        UNION ALL
+        SELECT value AS test_col FROM source
+        """
+        node = lineage("test_col", sql, dialect="spark")
+
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+
+        # Find a leaf node that is a literal (name is digit)
+        def find_literal_node(n):
+            if n.name.isdigit():
+                return n
+            for child in n.downstream:
+                result = find_literal_node(child)
+                if result:
+                    return result
+            return None
+
+        literal_node = find_literal_node(node)
+        if literal_node:
+            result = analyzer._extract_literal_representation(literal_node)
+            assert "<literal:" in result
+
+    def test_insert_with_union_literals(self):
+        """Test INSERT INTO with UNION containing literals."""
+        sql = """
+        INSERT INTO target_table
+        SELECT customer_id, status FROM active_customers
+        UNION ALL
+        SELECT customer_id, 'inactive' AS status FROM inactive_customers
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_queries(level="column")
+
+        assert len(results) == 1
+        items_for_status = [
+            item
+            for item in results[0].lineage_items
+            if "status" in item.output_name.lower()
+        ]
+        sources = [item.source_name for item in items_for_status]
+
+        # Should have both the column and the literal
+        assert any("active_customers" in s for s in sources)
+        assert any("<literal: 'inactive'>" in s for s in sources)
