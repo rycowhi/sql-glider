@@ -284,6 +284,40 @@ uv run sqlglider lineage query.sql --output-format csv --output-file docs/lineag
 
 Create machine-readable lineage documentation for data catalogs.
 
+### Literal Value Handling
+
+When analyzing UNION queries, SQL Glider identifies literal values (constants) as sources and displays them clearly:
+
+```sql
+-- query.sql
+SELECT customer_id, last_order_date FROM active_customers
+UNION ALL
+SELECT customer_id, NULL AS last_order_date FROM prospects
+UNION ALL
+SELECT customer_id, 'unknown' AS status FROM legacy_data
+```
+
+```bash
+uv run sqlglider lineage query.sql --column last_order_date
+```
+
+**Example Output:**
+```
++--------------------------------------------------+
+| Output Column   | Source Column                  |
+|-----------------+--------------------------------|
+| last_order_date | active_customers.last_order_date |
+|                 | <literal: NULL>                |
+```
+
+Literal values are displayed as `<literal: VALUE>` to clearly distinguish them from actual column sources:
+- `<literal: NULL>` - NULL values
+- `<literal: 0>` - Numeric literals
+- `<literal: 'string'>` - String literals
+- `<literal: CURRENT_TIMESTAMP()>` - Function calls
+
+This helps identify which branches of a UNION contribute actual data lineage versus hardcoded values.
+
 ### Multi-Level Analysis
 
 SQL Glider automatically traces through CTEs and subqueries:
