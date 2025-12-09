@@ -1555,3 +1555,131 @@ class TestTablesCommand:
             data = json.loads(result.stdout)
             tables = data["queries"][0]["tables"]
             assert any("analytics.customers" in t["name"] for t in tables)
+
+
+class TestStdinSupport:
+    """Tests for stdin support in CLI commands."""
+
+    def test_lineage_from_stdin(self):
+        """Test lineage command reads from stdin when no file provided."""
+        sql_content = "SELECT customer_id, customer_name FROM customers"
+
+        result = runner.invoke(app, ["lineage"], input=sql_content)
+
+        assert result.exit_code == 0
+        assert "customer_id" in result.stdout or "customer_name" in result.stdout
+
+    def test_lineage_from_stdin_json_format(self):
+        """Test lineage command with stdin and JSON output."""
+        sql_content = "SELECT id, name FROM users"
+
+        result = runner.invoke(
+            app, ["lineage", "--output-format", "json"], input=sql_content
+        )
+
+        assert result.exit_code == 0
+        import json
+
+        data = json.loads(result.stdout)
+        assert "queries" in data
+
+    def test_lineage_from_stdin_with_dialect(self):
+        """Test lineage command with stdin and dialect option."""
+        sql_content = "SELECT id FROM users"
+
+        result = runner.invoke(
+            app, ["lineage", "--dialect", "postgres"], input=sql_content
+        )
+
+        assert result.exit_code == 0
+
+    def test_tables_from_stdin(self):
+        """Test tables command reads from stdin when no file provided."""
+        sql_content = "SELECT * FROM customers JOIN orders ON customers.id = orders.customer_id"
+
+        result = runner.invoke(app, ["tables"], input=sql_content)
+
+        assert result.exit_code == 0
+        assert "customers" in result.stdout
+        assert "orders" in result.stdout
+
+    def test_tables_from_stdin_json_format(self):
+        """Test tables command with stdin and JSON output."""
+        sql_content = "SELECT * FROM users"
+
+        result = runner.invoke(
+            app, ["tables", "--output-format", "json"], input=sql_content
+        )
+
+        assert result.exit_code == 0
+        import json
+
+        data = json.loads(result.stdout)
+        assert "queries" in data
+        assert any("users" in t["name"] for t in data["queries"][0]["tables"])
+
+    def test_template_from_stdin(self):
+        """Test template command reads from stdin when no file provided."""
+        sql_content = "SELECT * FROM {{ schema }}.users"
+
+        result = runner.invoke(
+            app, ["template", "--var", "schema=analytics"], input=sql_content
+        )
+
+        assert result.exit_code == 0
+        assert "analytics.users" in result.stdout
+
+    def test_template_from_stdin_multiple_variables(self):
+        """Test template command with stdin and multiple variables."""
+        sql_content = "SELECT * FROM {{ schema }}.{{ table }}"
+
+        result = runner.invoke(
+            app,
+            ["template", "--var", "schema=prod", "--var", "table=orders"],
+            input=sql_content,
+        )
+
+        assert result.exit_code == 0
+        assert "prod.orders" in result.stdout
+
+    def test_lineage_file_takes_precedence_over_stdin(self):
+        """Test that file argument takes precedence over stdin."""
+        stdin_content = "SELECT wrong_column FROM wrong_table"
+        file_content = "SELECT correct_column FROM correct_table"
+
+        with NamedTemporaryFile(
+            mode="w", delete=False, suffix=".sql", encoding="utf-8"
+        ) as f:
+            f.write(file_content)
+            temp_path = Path(f.name)
+
+        try:
+            result = runner.invoke(
+                app,
+                ["lineage", str(temp_path), "--output-format", "json"],
+                input=stdin_content,
+            )
+
+            assert result.exit_code == 0
+            # Should use file content, not stdin
+            assert "correct_column" in result.stdout or "correct_table" in result.stdout
+        finally:
+            temp_path.unlink()
+
+    def test_stdin_with_multi_query(self):
+        """Test stdin with multiple SQL statements."""
+        sql_content = """
+        SELECT id FROM users;
+        SELECT order_id FROM orders;
+        """
+
+        result = runner.invoke(
+            app, ["lineage", "--output-format", "json"], input=sql_content
+        )
+
+        assert result.exit_code == 0
+        import json
+
+        data = json.loads(result.stdout)
+        # Should have two queries
+        assert len(data["queries"]) == 2

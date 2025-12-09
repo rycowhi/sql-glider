@@ -105,6 +105,37 @@ uv run sqlglider lineage query.sql --level table
 uv run sqlglider lineage query.sql --dialect postgres
 ```
 
+### Reading from Stdin
+
+All commands (`lineage`, `tables`, `template`) support reading SQL from stdin when no file is provided:
+
+```bash
+# Pipe SQL directly to lineage analysis
+echo "SELECT id, name FROM users" | uv run sqlglider lineage
+
+# Pipe SQL with options
+echo "SELECT * FROM orders" | uv run sqlglider lineage --output-format json
+
+# Use heredoc for multi-line SQL
+uv run sqlglider lineage << 'EOF'
+SELECT
+    c.customer_id,
+    c.name,
+    o.total
+FROM customers c
+JOIN orders o ON c.id = o.customer_id
+EOF
+
+# Pipe to tables command
+echo "SELECT * FROM users JOIN orders ON users.id = orders.user_id" | uv run sqlglider tables
+
+# Pipe template with variables
+echo "SELECT * FROM {{ schema }}.users" | uv run sqlglider template --var schema=prod
+
+# Chain commands: generate SQL and analyze
+cat query.sql | uv run sqlglider template --var env=prod | uv run sqlglider lineage
+```
+
 ### Multi-Query Files
 
 SQL Glider supports files with multiple SQL statements separated by semicolons:

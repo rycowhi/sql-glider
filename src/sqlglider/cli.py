@@ -1,6 +1,7 @@
 """CLI entry point for SQL Glider."""
 
 import json
+import sys
 from pathlib import Path
 from typing import List, Optional
 
@@ -8,6 +9,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 from sqlglot.errors import ParseError
+from typing_extensions import Annotated
 
 from sqlglider.lineage.analyzer import LineageAnalyzer
 from sqlglider.lineage.formatters import (
@@ -26,7 +28,6 @@ from sqlglider.templating import (
     load_all_variables,
 )
 from sqlglider.utils.config import load_config
-from sqlglider.utils.file_utils import read_sql_file
 
 app = typer.Typer(
     name="sqlglider",
@@ -97,14 +98,14 @@ def main():
 
 @app.command()
 def lineage(
-    sql_file: Path = typer.Argument(
-        ...,
-        exists=True,
-        file_okay=True,
-        dir_okay=False,
-        readable=True,
-        help="Path to SQL file to analyze",
-    ),
+    sql_file: Annotated[
+        typer.FileText,
+        typer.Argument(
+            default_factory=lambda: sys.stdin,
+            show_default="stdin",
+            help="Path to SQL file to analyze (reads from stdin if not provided)",
+        ),
+    ],
     level: Optional[str] = typer.Option(
         None,
         "--level",
@@ -228,9 +229,23 @@ def lineage(
         )
         raise typer.Exit(1)
 
+    # Check if reading from stdin (cross-platform: name is "<stdin>" on all OS)
+    is_stdin = sql_file.name == "<stdin>"
+
     try:
-        # Read SQL file
-        sql = read_sql_file(sql_file)
+        # Check if stdin is being used without input
+        if is_stdin and sys.stdin.isatty():
+            err_console.print(
+                "[red]Error:[/red] No SQL file provided and stdin is interactive. "
+                "Provide a SQL file path or pipe SQL via stdin."
+            )
+            raise typer.Exit(1)
+
+        # Read SQL from file or stdin
+        sql = sql_file.read()
+
+        # Determine source path for templating (None if stdin)
+        source_path = None if is_stdin else Path(sql_file.name)
 
         # Apply templating if specified
         sql = _apply_templating(
@@ -239,7 +254,7 @@ def lineage(
             cli_vars=var,
             vars_file=vars_file,
             config=config,
-            source_path=sql_file,
+            source_path=source_path,
         )
 
         # Create analyzer
@@ -316,14 +331,14 @@ def lineage(
 
 @app.command()
 def tables(
-    sql_file: Path = typer.Argument(
-        ...,
-        exists=True,
-        file_okay=True,
-        dir_okay=False,
-        readable=True,
-        help="Path to SQL file to analyze",
-    ),
+    sql_file: Annotated[
+        typer.FileText,
+        typer.Argument(
+            default_factory=lambda: sys.stdin,
+            show_default="stdin",
+            help="Path to SQL file to analyze (reads from stdin if not provided)",
+        ),
+    ],
     dialect: Optional[str] = typer.Option(
         None,
         "--dialect",
@@ -411,9 +426,23 @@ def tables(
         )
         raise typer.Exit(1)
 
+    # Check if reading from stdin (cross-platform: name is "<stdin>" on all OS)
+    is_stdin = sql_file.name == "<stdin>"
+
     try:
-        # Read SQL file
-        sql = read_sql_file(sql_file)
+        # Check if stdin is being used without input
+        if is_stdin and sys.stdin.isatty():
+            err_console.print(
+                "[red]Error:[/red] No SQL file provided and stdin is interactive. "
+                "Provide a SQL file path or pipe SQL via stdin."
+            )
+            raise typer.Exit(1)
+
+        # Read SQL from file or stdin
+        sql = sql_file.read()
+
+        # Determine source path for templating (None if stdin)
+        source_path = None if is_stdin else Path(sql_file.name)
 
         # Apply templating if specified
         sql = _apply_templating(
@@ -422,7 +451,7 @@ def tables(
             cli_vars=var,
             vars_file=vars_file,
             config=config,
-            source_path=sql_file,
+            source_path=source_path,
         )
 
         # Create analyzer
@@ -487,14 +516,14 @@ def tables(
 
 @app.command()
 def template(
-    sql_file: Path = typer.Argument(
-        ...,
-        exists=True,
-        file_okay=True,
-        dir_okay=False,
-        readable=True,
-        help="Path to SQL template file to render",
-    ),
+    sql_file: Annotated[
+        typer.FileText,
+        typer.Argument(
+            default_factory=lambda: sys.stdin,
+            show_default="stdin",
+            help="Path to SQL template file to render (reads from stdin if not provided)",
+        ),
+    ],
     templater: Optional[str] = typer.Option(
         None,
         "--templater",
@@ -570,9 +599,23 @@ def template(
     # For template command, default to "jinja" (always apply templating)
     templater = templater or config.templater or "jinja"
 
+    # Check if reading from stdin (cross-platform: name is "<stdin>" on all OS)
+    is_stdin = sql_file.name == "<stdin>"
+
     try:
-        # Read SQL file
-        sql = read_sql_file(sql_file)
+        # Check if stdin is being used without input
+        if is_stdin and sys.stdin.isatty():
+            err_console.print(
+                "[red]Error:[/red] No SQL file provided and stdin is interactive. "
+                "Provide a SQL file path or pipe SQL via stdin."
+            )
+            raise typer.Exit(1)
+
+        # Read SQL from file or stdin
+        sql = sql_file.read()
+
+        # Determine source path for templating (None if stdin)
+        source_path = None if is_stdin else Path(sql_file.name)
 
         # Apply templating (always for template command)
         rendered = _apply_templating(
@@ -581,7 +624,7 @@ def template(
             cli_vars=var,
             vars_file=vars_file,
             config=config,
-            source_path=sql_file,
+            source_path=source_path,
         )
 
         # Write output
