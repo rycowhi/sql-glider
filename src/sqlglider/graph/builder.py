@@ -2,11 +2,12 @@
 
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Dict, List, Literal, Optional, Set
+from typing import Callable, Dict, List, Optional, Set
 
 import rustworkx as rx
 from rich.console import Console
 
+from sqlglider.global_models import AnalysisLevel, NodeFormat
 from sqlglider.graph.models import (
     GraphEdge,
     GraphMetadata,
@@ -28,7 +29,7 @@ class GraphBuilder:
 
     def __init__(
         self,
-        node_format: Literal["qualified", "structured"] = "qualified",
+        node_format: NodeFormat = NodeFormat.QUALIFIED,
         dialect: str = "spark",
         sql_preprocessor: Optional[SqlPreprocessor] = None,
     ):
@@ -36,7 +37,7 @@ class GraphBuilder:
         Initialize the graph builder.
 
         Args:
-            node_format: Format for node identifiers ("qualified" or "structured")
+            node_format: Format for node identifiers (QUALIFIED or STRUCTURED)
             dialect: Default SQL dialect (used when not specified per-file)
             sql_preprocessor: Optional function to preprocess SQL before analysis.
                              Takes (sql: str, file_path: Path) and returns processed SQL.
@@ -81,7 +82,7 @@ class GraphBuilder:
                 sql_content = self.sql_preprocessor(sql_content, file_path)
 
             analyzer = LineageAnalyzer(sql_content, dialect=file_dialect)
-            results = analyzer.analyze_queries(level="column")
+            results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
 
             # Print warnings for any skipped queries within the file
             for skipped in analyzer.skipped_queries:

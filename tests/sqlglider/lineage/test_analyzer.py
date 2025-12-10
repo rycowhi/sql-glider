@@ -2,6 +2,7 @@
 
 import pytest
 
+from sqlglider.global_models import AnalysisLevel
 from sqlglider.lineage.analyzer import LineageAnalyzer
 
 
@@ -100,7 +101,9 @@ class TestCaseInsensitiveForwardLineage:
     ):
         """Test that column matching is case-insensitive for simple queries."""
         analyzer = LineageAnalyzer(simple_query, dialect="spark")
-        results = analyzer.analyze_queries(level="column", column=column_input)
+        results = analyzer.analyze_queries(
+            level=AnalysisLevel.COLUMN, column=column_input
+        )
 
         assert len(results) == 1
         assert len(results[0].lineage_items) == 1
@@ -154,7 +157,9 @@ class TestCaseInsensitiveForwardLineage:
     ):
         """Test case-insensitive matching for queries with CTEs and DML."""
         analyzer = LineageAnalyzer(cte_query, dialect="spark")
-        results = analyzer.analyze_queries(level="column", column=column_input)
+        results = analyzer.analyze_queries(
+            level=AnalysisLevel.COLUMN, column=column_input
+        )
 
         assert len(results) == 1
         assert len(results[0].lineage_items) == len(expected_sources)
@@ -184,7 +189,9 @@ class TestCaseInsensitiveForwardLineage:
     ):
         """Test case-insensitive matching for queries with subqueries."""
         analyzer = LineageAnalyzer(subquery_query, dialect="spark")
-        results = analyzer.analyze_queries(level="column", column=column_input)
+        results = analyzer.analyze_queries(
+            level=AnalysisLevel.COLUMN, column=column_input
+        )
 
         assert len(results) == 1
         assert len(results[0].lineage_items) >= 1
@@ -195,7 +202,9 @@ class TestCaseInsensitiveForwardLineage:
         analyzer = LineageAnalyzer(simple_query, dialect="spark")
 
         with pytest.raises(ValueError) as exc_info:
-            analyzer.analyze_queries(level="column", column="NONEXISTENT.COLUMN")
+            analyzer.analyze_queries(
+                level=AnalysisLevel.COLUMN, column="NONEXISTENT.COLUMN"
+            )
 
         error_message = str(exc_info.value)
         assert "NONEXISTENT.COLUMN" in error_message
@@ -204,7 +213,7 @@ class TestCaseInsensitiveForwardLineage:
     def test_all_columns_ignores_case_parameter(self, simple_query):
         """Test that omitting column parameter returns all columns regardless of case."""
         analyzer = LineageAnalyzer(simple_query, dialect="spark")
-        results = analyzer.analyze_queries(level="column", column=None)
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN, column=None)
 
         # Should return 1 query result with 4 lineage items
         assert len(results) == 1
@@ -316,7 +325,9 @@ class TestCaseInsensitiveReverseLineage:
     ):
         """Test that source column matching is case-insensitive for simple queries."""
         analyzer = LineageAnalyzer(simple_query, dialect="spark")
-        results = analyzer.analyze_queries(level="column", source_column=source_input)
+        results = analyzer.analyze_queries(
+            level=AnalysisLevel.COLUMN, source_column=source_input
+        )
 
         assert len(results) == 1
         assert len(results[0].lineage_items) == len(expected_affected_outputs)
@@ -372,7 +383,9 @@ class TestCaseInsensitiveReverseLineage:
     ):
         """Test case-insensitive reverse lineage for queries with CTEs and DML."""
         analyzer = LineageAnalyzer(cte_query, dialect="spark")
-        results = analyzer.analyze_queries(level="column", source_column=source_input)
+        results = analyzer.analyze_queries(
+            level=AnalysisLevel.COLUMN, source_column=source_input
+        )
 
         assert len(results) == 1
         assert len(results[0].lineage_items) == len(expected_affected_outputs)
@@ -385,7 +398,9 @@ class TestCaseInsensitiveReverseLineage:
         analyzer = LineageAnalyzer(simple_query, dialect="spark")
 
         with pytest.raises(ValueError) as exc_info:
-            analyzer.analyze_queries(level="column", source_column="NONEXISTENT.SOURCE")
+            analyzer.analyze_queries(
+                level=AnalysisLevel.COLUMN, source_column="NONEXISTENT.SOURCE"
+            )
 
         error_message = str(exc_info.value)
         assert "NONEXISTENT.SOURCE" in error_message
@@ -402,10 +417,10 @@ class TestCaseInsensitiveBoundaryConditions:
 
         # Try both cases
         results_lower = analyzer.analyze_queries(
-            level="column", column="single_table.column_name"
+            level=AnalysisLevel.COLUMN, column="single_table.column_name"
         )
         results_upper = analyzer.analyze_queries(
-            level="column", column="SINGLE_TABLE.COLUMN_NAME"
+            level=AnalysisLevel.COLUMN, column="SINGLE_TABLE.COLUMN_NAME"
         )
 
         assert (
@@ -424,7 +439,7 @@ class TestCaseInsensitiveBoundaryConditions:
         analyzer = LineageAnalyzer(sql, dialect="spark")
 
         # Note: This tests current behavior - may need adjustment based on SQLGlot's handling
-        results = analyzer.analyze_queries(level="column", column=None)
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN, column=None)
         assert len(results) == 1
         assert len(results[0].lineage_items) >= 1
 
@@ -439,7 +454,7 @@ class TestCaseInsensitiveBoundaryConditions:
         analyzer = LineageAnalyzer(sql, dialect="spark")
 
         # Unicode case folding should work
-        results = analyzer.analyze_queries(level="column", column=None)
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN, column=None)
         assert len(results) == 1
         assert len(results[0].lineage_items) >= 1
 
@@ -481,7 +496,9 @@ class TestCaseInsensitiveBoundaryConditions:
         )
 
         search_term = f"{search_table}.{search_col}"
-        results = analyzer.analyze_queries(level="column", column=search_term)
+        results = analyzer.analyze_queries(
+            level=AnalysisLevel.COLUMN, column=search_term
+        )
 
         assert len(results) == 1
         # Should find the column regardless of case differences
@@ -498,7 +515,7 @@ class TestAnalyzerEdgeCases:
 
         with pytest.raises(ParseError):
             analyzer = LineageAnalyzer(invalid_sql, dialect="spark")
-            analyzer.analyze_queries(level="column")
+            analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
 
     def test_empty_sql_raises_error(self):
         """Test that empty SQL raises an error."""
@@ -508,7 +525,7 @@ class TestAnalyzerEdgeCases:
 
         with pytest.raises((ParseError, ValueError)):
             analyzer = LineageAnalyzer(empty_sql, dialect="spark")
-            analyzer.analyze_queries(level="column")
+            analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
 
     def test_different_dialects(self):
         """Test analyzer works with different SQL dialects."""
@@ -516,7 +533,7 @@ class TestAnalyzerEdgeCases:
 
         for dialect in ["postgres", "mysql", "snowflake", "bigquery"]:
             analyzer = LineageAnalyzer(sql, dialect=dialect)
-            results = analyzer.analyze_queries(level="column")
+            results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
             assert len(results) == 1
             assert len(results[0].lineage_items) >= 1
 
@@ -533,7 +550,7 @@ class TestAnalyzerEdgeCases:
         """
 
         analyzer = LineageAnalyzer(sql, dialect="spark")
-        results = analyzer.analyze_queries(level="column")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
 
         # Should find lineage for the created columns
         assert len(results) == 1
@@ -554,7 +571,7 @@ class TestAnalyzerEdgeCases:
         """
 
         analyzer = LineageAnalyzer(sql, dialect="spark")
-        results = analyzer.analyze_queries(level="column")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
 
         # Should find lineage for inserted columns
         assert len(results) == 1
@@ -571,7 +588,7 @@ class TestAnalyzerEdgeCases:
         """
 
         analyzer = LineageAnalyzer(sql, dialect="spark")
-        results = analyzer.analyze_queries(level="table")
+        results = analyzer.analyze_queries(level=AnalysisLevel.TABLE)
 
         assert len(results) == 1
         assert len(results[0].lineage_items) >= 2
@@ -597,7 +614,7 @@ class TestAnalyzerEdgeCases:
         """
 
         analyzer = LineageAnalyzer(sql, dialect="spark")
-        results = analyzer.analyze_queries(level="table")
+        results = analyzer.analyze_queries(level=AnalysisLevel.TABLE)
 
         assert len(results) == 1
         assert len(results[0].lineage_items) >= 1
@@ -620,7 +637,7 @@ class TestAnalyzerEdgeCases:
         """
 
         analyzer = LineageAnalyzer(sql, dialect="spark")
-        results = analyzer.analyze_queries(level="column")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
 
         # Should successfully analyze the CTE chain
         assert len(results) == 1
@@ -635,7 +652,7 @@ class TestAnalyzerEdgeCases:
         """
 
         analyzer = LineageAnalyzer(sql, dialect="spark")
-        results = analyzer.analyze_queries(level="column")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
 
         # Should find lineage for both sources
         assert len(results) == 1
@@ -653,7 +670,7 @@ class TestAnalyzerEdgeCases:
         """
 
         analyzer = LineageAnalyzer(sql, dialect="spark")
-        results = analyzer.analyze_queries(level="column")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
 
         assert len(results) == 1
         assert len(results[0].lineage_items) >= 1
@@ -675,7 +692,7 @@ class TestAnalyzerEdgeCases:
         """
 
         analyzer = LineageAnalyzer(sql, dialect="spark")
-        results = analyzer.analyze_queries(level="column")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
 
         assert len(results) == 1
         assert len(results[0].lineage_items) >= 1
@@ -695,7 +712,7 @@ class TestAnalyzerEdgeCases:
         """
 
         analyzer = LineageAnalyzer(sql, dialect="spark")
-        results = analyzer.analyze_queries(level="column")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
 
         assert len(results) == 1
         assert (
@@ -713,7 +730,7 @@ class TestAnalyzerEdgeCases:
         """
 
         analyzer = LineageAnalyzer(sql, dialect="spark")
-        results = analyzer.analyze_queries(level="column")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
 
         assert len(results) == 1
         assert len(results[0].lineage_items) >= 1
@@ -729,7 +746,7 @@ class TestAnalyzerEdgeCases:
         """
 
         analyzer = LineageAnalyzer(sql, dialect="spark")
-        results = analyzer.analyze_queries(level="column")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
 
         assert len(results) == 1
         assert len(results[0].lineage_items) >= 1
@@ -743,7 +760,8 @@ class TestAnalyzerEdgeCases:
         # Should raise ValueError for nonexistent column
         with pytest.raises(ValueError) as exc_info:
             analyzer.analyze_queries(
-                level="column", source_column="nonexistent_table.nonexistent_column"
+                level=AnalysisLevel.COLUMN,
+                source_column="nonexistent_table.nonexistent_column",
             )
 
         assert "not found" in str(exc_info.value).lower()
@@ -755,7 +773,9 @@ class TestAnalyzerEdgeCases:
         analyzer = LineageAnalyzer(sql, dialect="spark")
 
         with pytest.raises(ValueError) as exc_info:
-            analyzer.analyze_queries(level="column", column="nonexistent_column")
+            analyzer.analyze_queries(
+                level=AnalysisLevel.COLUMN, column="nonexistent_column"
+            )
 
         assert "not found" in str(exc_info.value).lower()
 
@@ -771,7 +791,7 @@ class TestAnalyzerEdgeCases:
         """
 
         analyzer = LineageAnalyzer(sql, dialect="spark")
-        results = analyzer.analyze_queries(level="column")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
 
         assert len(results) == 1
         assert len(results[0].lineage_items) >= 2
@@ -792,7 +812,7 @@ class TestAnalyzerEdgeCases:
         """
 
         analyzer = LineageAnalyzer(sql, dialect="spark")
-        results = analyzer.analyze_queries(level="column")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
 
         assert len(results) == 1
         assert len(results[0].lineage_items) >= 4
@@ -814,7 +834,7 @@ class TestAnalyzerEdgeCases:
         """
 
         analyzer = LineageAnalyzer(sql, dialect="spark")
-        results = analyzer.analyze_queries(level="column")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
 
         assert len(results) == 1
         assert len(results[0].lineage_items) >= 1
@@ -831,7 +851,7 @@ class TestAnalyzerEdgeCases:
         """
 
         analyzer = LineageAnalyzer(sql, dialect="postgres")
-        results = analyzer.analyze_queries(level="column")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
 
         assert len(results) == 1
         assert len(results[0].lineage_items) >= 1
@@ -846,7 +866,7 @@ class TestAnalyzerEdgeCases:
         """
 
         analyzer = LineageAnalyzer(sql, dialect="spark")
-        results = analyzer.analyze_queries(level="column")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
 
         assert len(results) == 1
         assert len(results[0].lineage_items) >= 2
@@ -864,7 +884,7 @@ class TestAnalyzerEdgeCases:
         """
 
         analyzer = LineageAnalyzer(sql, dialect="spark")
-        results = analyzer.analyze_queries(level="column")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
 
         assert len(results) == 1
         assert len(results[0].lineage_items) >= 1
@@ -882,7 +902,7 @@ class TestAnalyzerEdgeCases:
         """
 
         analyzer = LineageAnalyzer(sql, dialect="spark")
-        results = analyzer.analyze_queries(level="column")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
 
         assert len(results) == 1
         assert len(results[0].lineage_items) >= 1
@@ -898,7 +918,7 @@ class TestAnalyzerEdgeCases:
         """
 
         analyzer = LineageAnalyzer(sql, dialect="spark")
-        results = analyzer.analyze_queries(level="column")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
 
         assert len(results) == 1
         assert len(results[0].lineage_items) >= 2
@@ -912,7 +932,7 @@ class TestAnalyzerEdgeCases:
         """
 
         analyzer = LineageAnalyzer(sql, dialect="spark")
-        results = analyzer.analyze_queries(level="column")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
 
         assert len(results) == 1
         assert len(results[0].lineage_items) >= 1
@@ -926,7 +946,7 @@ class TestAnalyzerEdgeCases:
         """
 
         analyzer = LineageAnalyzer(sql, dialect="spark")
-        results = analyzer.analyze_queries(level="column")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
 
         assert len(results) == 1
         assert len(results[0].lineage_items) >= 1
@@ -982,7 +1002,7 @@ class TestMultiQueryParsing:
     def test_analyze_all_queries(self, multi_query_sql):
         """Test analyzing all queries returns results for each query."""
         analyzer = LineageAnalyzer(multi_query_sql, dialect="spark")
-        results = analyzer.analyze_queries(level="column")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
 
         assert len(results) == 3
         from sqlglider.lineage.analyzer import QueryLineageResult
@@ -1008,7 +1028,7 @@ class TestMultiQueryParsing:
         """Test analyzing specific column across all queries."""
         analyzer = LineageAnalyzer(multi_query_sql, dialect="spark")
         results = analyzer.analyze_queries(
-            level="column", column="customers.customer_id"
+            level=AnalysisLevel.COLUMN, column="customers.customer_id"
         )
 
         # Should get only queries that have this specific column
@@ -1026,7 +1046,7 @@ class TestMultiQueryParsing:
     def test_backward_compatibility_single_query(self, single_query_sql):
         """Test that single query still works with analyze_queries method."""
         analyzer = LineageAnalyzer(single_query_sql, dialect="spark")
-        results = analyzer.analyze_queries(level="column")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
 
         assert len(results) == 1  # 1 query
         assert len(results[0].lineage_items) == 2  # customer_id, customer_name
@@ -1055,7 +1075,9 @@ class TestTableFiltering:
     def test_filter_by_table(self, multi_query_different_tables):
         """Test filtering to only queries that use a specific table."""
         analyzer = LineageAnalyzer(multi_query_different_tables, dialect="spark")
-        results = analyzer.analyze_queries(level="column", table_filter="customers")
+        results = analyzer.analyze_queries(
+            level=AnalysisLevel.COLUMN, table_filter="customers"
+        )
 
         # Should only get the query that references customers table
         assert len(results) == 1
@@ -1065,7 +1087,9 @@ class TestTableFiltering:
     def test_filter_by_table_multiple_matches(self, multi_query_different_tables):
         """Test filtering when multiple queries reference the table."""
         analyzer = LineageAnalyzer(multi_query_different_tables, dialect="spark")
-        results = analyzer.analyze_queries(level="column", table_filter="orders")
+        results = analyzer.analyze_queries(
+            level=AnalysisLevel.COLUMN, table_filter="orders"
+        )
 
         # Should only get the query that references orders table
         assert len(results) == 1
@@ -1075,13 +1099,13 @@ class TestTableFiltering:
         """Test that table filtering is case-insensitive."""
         analyzer = LineageAnalyzer(multi_query_different_tables, dialect="spark")
         results_lower = analyzer.analyze_queries(
-            level="column", table_filter="products"
+            level=AnalysisLevel.COLUMN, table_filter="products"
         )
         results_upper = analyzer.analyze_queries(
-            level="column", table_filter="PRODUCTS"
+            level=AnalysisLevel.COLUMN, table_filter="PRODUCTS"
         )
         results_mixed = analyzer.analyze_queries(
-            level="column", table_filter="PrOdUcTs"
+            level=AnalysisLevel.COLUMN, table_filter="PrOdUcTs"
         )
 
         assert len(results_lower) == len(results_upper) == len(results_mixed) == 1
@@ -1096,7 +1120,7 @@ class TestTableFiltering:
         """Test filtering with table that doesn't exist."""
         analyzer = LineageAnalyzer(multi_query_different_tables, dialect="spark")
         results = analyzer.analyze_queries(
-            level="column", table_filter="nonexistent_table"
+            level=AnalysisLevel.COLUMN, table_filter="nonexistent_table"
         )
 
         assert len(results) == 0
@@ -1104,7 +1128,9 @@ class TestTableFiltering:
     def test_filter_partial_match(self, multi_query_different_tables):
         """Test filtering with partial table name."""
         analyzer = LineageAnalyzer(multi_query_different_tables, dialect="spark")
-        results = analyzer.analyze_queries(level="column", table_filter="cust")
+        results = analyzer.analyze_queries(
+            level=AnalysisLevel.COLUMN, table_filter="cust"
+        )
 
         # Should match "customers" table
         assert len(results) == 1
@@ -1148,7 +1174,7 @@ class TestMultiQueryReverseLineage:
         """Test reverse lineage finds only queries with the exact column."""
         analyzer = LineageAnalyzer(multi_query_sql, dialect="spark")
         results = analyzer.analyze_queries(
-            level="column", source_column="customers.customer_id"
+            level=AnalysisLevel.COLUMN, source_column="customers.customer_id"
         )
 
         # Should only get query 0 (which has customers.customer_id)
@@ -1166,7 +1192,9 @@ class TestMultiQueryReverseLineage:
 
         # Search for orders.customer_id (not customers.customer_id) with orders table filter
         results = analyzer.analyze_queries(
-            level="column", source_column="orders.customer_id", table_filter="orders"
+            level=AnalysisLevel.COLUMN,
+            source_column="orders.customer_id",
+            table_filter="orders",
         )
 
         # Should get query 1 which has orders.customer_id from orders table
@@ -1178,7 +1206,9 @@ class TestMultiQueryReverseLineage:
         analyzer = LineageAnalyzer(multi_query_sql, dialect="spark")
 
         with pytest.raises(ValueError) as exc_info:
-            analyzer.analyze_queries(level="column", source_column="nonexistent.column")
+            analyzer.analyze_queries(
+                level=AnalysisLevel.COLUMN, source_column="nonexistent.column"
+            )
 
         assert "not found" in str(exc_info.value).lower()
 
@@ -1190,7 +1220,7 @@ class TestMultiQueryReverseLineage:
         """
         analyzer = LineageAnalyzer(sql, dialect="spark")
         results = analyzer.analyze_queries(
-            level="column", source_column="orders.order_total"
+            level=AnalysisLevel.COLUMN, source_column="orders.order_total"
         )
 
         # Should find the column in query 0
@@ -1205,7 +1235,7 @@ class TestMultiQueryReverseLineage:
         sql = "SELECT order_id, order_total, customer_id FROM orders"
         analyzer = LineageAnalyzer(sql, dialect="spark")
         results = analyzer.analyze_queries(
-            level="column", source_column="orders.order_total"
+            level=AnalysisLevel.COLUMN, source_column="orders.order_total"
         )
 
         assert len(results) == 1
@@ -1229,7 +1259,7 @@ class TestMultiQueryTableLineage:
     def test_table_lineage_all_queries(self, multi_query_sql):
         """Test table lineage across all queries."""
         analyzer = LineageAnalyzer(multi_query_sql, dialect="spark")
-        results = analyzer.analyze_queries(level="table")
+        results = analyzer.analyze_queries(level=AnalysisLevel.TABLE)
 
         # Should get results from all 3 queries
         assert len(results) == 3
@@ -1250,7 +1280,9 @@ class TestMultiQueryTableLineage:
     def test_table_lineage_with_filter(self, multi_query_sql):
         """Test table lineage with table filter."""
         analyzer = LineageAnalyzer(multi_query_sql, dialect="spark")
-        results = analyzer.analyze_queries(level="table", table_filter="products")
+        results = analyzer.analyze_queries(
+            level=AnalysisLevel.TABLE, table_filter="products"
+        )
 
         # Should only get query with products table
         assert len(results) == 1
@@ -1289,7 +1321,7 @@ class TestMultiQueryIsolation:
         in lineage results.
         """
         analyzer = LineageAnalyzer(isolated_queries_sql, dialect="spark")
-        results = analyzer.analyze_queries(level="column")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
 
         # Query 0: SELECT from customers only
         # Should NOT have any empty sources and should ONLY reference customers table
@@ -1345,7 +1377,7 @@ class TestMultiQueryIsolation:
         SELECT order_id, order_total FROM orders;
         """
         analyzer = LineageAnalyzer(sql, dialect="spark")
-        results = analyzer.analyze_queries(level="column")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
 
         # Query 0: Should only reference products
         query0_sources = [item.source_name for item in results[0].lineage_items]
@@ -1369,7 +1401,7 @@ class TestSkippedQueries:
         DELETE FROM orders WHERE id = 1;
         """
         analyzer = LineageAnalyzer(sql, dialect="spark")
-        results = analyzer.analyze_queries(level="column")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
 
         # Only the SELECT query should have results
         assert len(results) == 1
@@ -1396,7 +1428,7 @@ class TestSkippedQueries:
         INSERT INTO target SELECT id FROM source;
         """
         analyzer = LineageAnalyzer(sql, dialect="spark")
-        results = analyzer.analyze_queries(level="column")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
 
         # Both queries should be analyzed
         assert len(results) == 2
@@ -1432,7 +1464,7 @@ class TestSkippedQueries:
         DELETE FROM cleanup_table;
         """
         analyzer = LineageAnalyzer(sql, dialect="spark")
-        results = analyzer.analyze_queries(level="column")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
 
         # Should have 4 results (3 SELECTs + CREATE VIEW which contains a SELECT)
         assert len(results) == 4
@@ -1809,7 +1841,7 @@ class TestLiteralHandling:
         SELECT customer_id, NULL AS last_order_date FROM prospects
         """
         analyzer = LineageAnalyzer(sql, dialect="spark")
-        results = analyzer.analyze_queries(level="column")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
 
         assert len(results) == 1
         # Find the lineage item for last_order_date
@@ -1832,7 +1864,7 @@ class TestLiteralHandling:
         SELECT customer_id, 0 AS total_orders FROM new_customers
         """
         analyzer = LineageAnalyzer(sql, dialect="spark")
-        results = analyzer.analyze_queries(level="column")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
 
         assert len(results) == 1
         items_for_orders = [
@@ -1853,7 +1885,7 @@ class TestLiteralHandling:
         SELECT customer_id, 'prospect' AS status FROM prospects
         """
         analyzer = LineageAnalyzer(sql, dialect="spark")
-        results = analyzer.analyze_queries(level="column")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
 
         assert len(results) == 1
         items_for_status = [
@@ -1875,7 +1907,7 @@ class TestLiteralHandling:
         SELECT customer_id, CURRENT_TIMESTAMP() AS updated_at FROM prospects
         """
         analyzer = LineageAnalyzer(sql, dialect="spark")
-        results = analyzer.analyze_queries(level="column")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
 
         assert len(results) == 1
         items_for_updated = [
@@ -1898,7 +1930,7 @@ class TestLiteralHandling:
         SELECT customer_id, order_date FROM archived_orders
         """
         analyzer = LineageAnalyzer(sql, dialect="spark")
-        results = analyzer.analyze_queries(level="column")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
 
         assert len(results) == 1
         items_for_date = [
@@ -1922,7 +1954,7 @@ class TestLiteralHandling:
         FROM customers
         """
         analyzer = LineageAnalyzer(sql, dialect="spark")
-        results = analyzer.analyze_queries(level="column")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
 
         assert len(results) == 1
         items_for_orders = [
@@ -1949,7 +1981,7 @@ class TestLiteralHandling:
         FROM customers
         """
         analyzer = LineageAnalyzer(sql, dialect="spark")
-        results = analyzer.analyze_queries(level="column")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
 
         assert len(results) == 1
         items_for_source = [
@@ -1977,7 +2009,7 @@ class TestLiteralHandling:
         FROM customers
         """
         analyzer = LineageAnalyzer(sql, dialect="spark")
-        results = analyzer.analyze_queries(level="column")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
 
         assert len(results) == 1
         # CASE expressions should trace to the column used in conditions
@@ -2028,7 +2060,7 @@ class TestLiteralHandling:
         SELECT customer_id, 'inactive' AS status FROM inactive_customers
         """
         analyzer = LineageAnalyzer(sql, dialect="spark")
-        results = analyzer.analyze_queries(level="column")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
 
         assert len(results) == 1
         items_for_status = [

@@ -6,6 +6,7 @@ from typing import Dict, List, Set
 
 import rustworkx as rx
 
+from sqlglider.global_models import NodeFormat
 from sqlglider.graph.models import (
     GraphEdge,
     GraphMetadata,
@@ -108,7 +109,7 @@ class GraphMerger:
         ]
 
         metadata = GraphMetadata(
-            node_format="qualified",  # Merged graphs use qualified format
+            node_format=NodeFormat.QUALIFIED,  # Merged graphs use qualified format
             default_dialect="spark",
             created_at=datetime.now(timezone.utc).isoformat(),
             source_files=sorted(self._source_files),

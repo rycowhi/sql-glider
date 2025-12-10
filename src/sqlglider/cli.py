@@ -3,7 +3,7 @@
 import json
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import Callable, List, Optional
 
 import typer
 from rich.console import Console
@@ -11,6 +11,7 @@ from rich.table import Table
 from sqlglot.errors import ParseError
 from typing_extensions import Annotated
 
+from sqlglider.global_models import AnalysisLevel, NodeFormat
 from sqlglider.lineage.analyzer import LineageAnalyzer
 from sqlglider.lineage.formatters import (
     CsvFormatter,
@@ -203,13 +204,15 @@ def lineage(
 
     # Apply priority resolution: CLI args > config > defaults
     dialect = dialect or config.dialect or "spark"
-    level = level or config.level or "column"
+    level_str = level or config.level or "column"
     output_format = output_format or config.output_format or "text"
     templater = templater or config.templater  # None means no templating
-    # Validate level
-    if level not in ["column", "table"]:
+    # Validate and convert level to enum
+    try:
+        analysis_level = AnalysisLevel(level_str)
+    except ValueError:
         err_console.print(
-            f"[red]Error:[/red] Invalid level '{level}'. Use 'column' or 'table'."
+            f"[red]Error:[/red] Invalid level '{level_str}'. Use 'column' or 'table'."
         )
         raise typer.Exit(1)
 
@@ -262,7 +265,7 @@ def lineage(
 
         # Unified lineage analysis (handles both single and multi-query files)
         results = analyzer.analyze_queries(
-            level=level,
+            level=analysis_level,
             column=column,
             source_column=source_column,
             table_filter=table_filter,
@@ -757,8 +760,10 @@ def graph_build(
     dialect = dialect or config.dialect or "spark"
     templater = templater or config.templater  # None means no templating
 
-    # Validate node format
-    if node_format not in ["qualified", "structured"]:
+    # Validate and convert node format to enum
+    try:
+        node_format_enum = NodeFormat(node_format)
+    except ValueError:
         err_console.print(
             f"[red]Error:[/red] Invalid node format '{node_format}'. "
             "Use 'qualified' or 'structured'."
@@ -773,7 +778,7 @@ def graph_build(
         raise typer.Exit(1)
 
     # Create SQL preprocessor if templating is enabled
-    sql_preprocessor = None
+    sql_preprocessor: Optional[Callable[[str, Path], str]] = None
     if templater:
         # Load variables once for all files
         config_vars_file = None
@@ -798,14 +803,16 @@ def graph_build(
 
         templater_instance = get_templater(templater)
 
-        def sql_preprocessor(sql: str, file_path: Path) -> str:
+        def _preprocess(sql: str, file_path: Path) -> str:
             return templater_instance.render(
                 sql, variables=variables, source_path=file_path
             )
 
+        sql_preprocessor = _preprocess
+
     try:
         builder = GraphBuilder(
-            node_format=node_format,
+            node_format=node_format_enum,
             dialect=dialect,
             sql_preprocessor=sql_preprocessor,
         )
@@ -1022,6 +1029,7 @@ def graph_query(
         if upstream:
             result = querier.find_upstream(upstream)
         else:
+            assert downstream is not None  # Validated above
             result = querier.find_downstream(downstream)
 
         # Format and output

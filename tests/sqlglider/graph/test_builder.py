@@ -5,6 +5,7 @@ from tempfile import NamedTemporaryFile, TemporaryDirectory
 
 import pytest
 
+from sqlglider.global_models import NodeFormat
 from sqlglider.graph.builder import GraphBuilder
 
 
@@ -80,11 +81,11 @@ class TestGraphBuilderSingleFile:
             temp_path = Path(f.name)
 
         try:
-            builder = GraphBuilder(node_format="structured")
+            builder = GraphBuilder(node_format=NodeFormat.STRUCTURED)
             builder.add_file(temp_path)
             graph = builder.build()
 
-            assert graph.metadata.node_format == "structured"
+            assert graph.metadata.node_format == NodeFormat.STRUCTURED
         finally:
             temp_path.unlink()
 

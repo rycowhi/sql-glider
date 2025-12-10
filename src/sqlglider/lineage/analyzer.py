@@ -1,12 +1,14 @@
 """Core lineage analysis using SQLGlot."""
 
 from enum import Enum
-from typing import Callable, Iterator, List, Literal, Optional, Set, Tuple
+from typing import Callable, Iterator, List, Optional, Set, Tuple
 
 from pydantic import BaseModel, Field
 from sqlglot import exp, parse
 from sqlglot.errors import ParseError
 from sqlglot.lineage import Node, lineage
+
+from sqlglider.global_models import AnalysisLevel
 
 
 class TableUsage(str, Enum):
@@ -64,7 +66,7 @@ class QueryLineageResult(BaseModel):
 
     metadata: QueryMetadata
     lineage_items: List[LineageItem] = Field(default_factory=list)
-    level: Literal["column", "table"]
+    level: AnalysisLevel
 
 
 class SkippedQuery(BaseModel):
@@ -100,10 +102,12 @@ class LineageAnalyzer:
 
         try:
             # Parse all statements in the SQL string
-            self.expressions = parse(sql, dialect=dialect)
+            parsed = parse(sql, dialect=dialect)
 
             # Filter out None values (can happen with empty statements or comments)
-            self.expressions = [expr for expr in self.expressions if expr is not None]
+            self.expressions: List[exp.Expression] = [
+                expr for expr in parsed if expr is not None
+            ]
 
             if not self.expressions:
                 raise ParseError("No valid SQL statements found")
@@ -230,7 +234,7 @@ class LineageAnalyzer:
 
     def analyze_queries(
         self,
-        level: Literal["column", "table"] = "column",
+        level: AnalysisLevel = AnalysisLevel.COLUMN,
         column: Optional[str] = None,
         source_column: Optional[str] = None,
         table_filter: Optional[str] = None,
@@ -281,7 +285,7 @@ class LineageAnalyzer:
             try:
                 lineage_items: List[LineageItem] = []
 
-                if level == "column":
+                if level == AnalysisLevel.COLUMN:
                     if source_column:
                         # Reverse lineage (impact analysis)
                         lineage_items = self._analyze_reverse_lineage_internal(

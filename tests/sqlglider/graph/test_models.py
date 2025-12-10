@@ -5,6 +5,7 @@ from tempfile import NamedTemporaryFile
 
 import pytest
 
+from sqlglider.global_models import NodeFormat
 from sqlglider.graph.models import (
     GraphEdge,
     GraphMetadata,
@@ -200,7 +201,7 @@ class TestGraphMetadata:
     def test_default_values(self):
         """Test default metadata values."""
         metadata = GraphMetadata()
-        assert metadata.node_format == "qualified"
+        assert metadata.node_format == NodeFormat.QUALIFIED
         assert metadata.default_dialect == "spark"
         assert metadata.source_files == []
         assert metadata.total_nodes == 0
@@ -210,13 +211,13 @@ class TestGraphMetadata:
     def test_custom_values(self):
         """Test custom metadata values."""
         metadata = GraphMetadata(
-            node_format="structured",
+            node_format=NodeFormat.STRUCTURED,
             default_dialect="postgres",
             source_files=["query1.sql", "query2.sql"],
             total_nodes=10,
             total_edges=15,
         )
-        assert metadata.node_format == "structured"
+        assert metadata.node_format == NodeFormat.STRUCTURED
         assert metadata.default_dialect == "postgres"
         assert len(metadata.source_files) == 2
         assert metadata.total_nodes == 10

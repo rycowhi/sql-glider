@@ -505,6 +505,9 @@ uv run ruff check --fix
 
 # Format code
 uv run ruff format
+
+# Type checking
+uv run basedpyright
 ```
 
 ### Project Structure

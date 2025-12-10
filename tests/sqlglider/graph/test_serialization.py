@@ -6,6 +6,7 @@ from tempfile import NamedTemporaryFile, TemporaryDirectory
 import pytest
 import rustworkx as rx
 
+from sqlglider.global_models import NodeFormat
 from sqlglider.graph.models import (
     GraphEdge,
     GraphMetadata,
@@ -39,7 +40,7 @@ class TestSaveAndLoadGraph:
         ]
         original = LineageGraph(
             metadata=GraphMetadata(
-                node_format="qualified",
+                node_format=NodeFormat.QUALIFIED,
                 default_dialect="spark",
                 source_files=["/path/query.sql"],
                 total_nodes=2,

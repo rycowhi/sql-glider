@@ -3,9 +3,11 @@
 import csv
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Literal, Optional
+from typing import List, Optional
 
 from pydantic import BaseModel, Field
+
+from sqlglider.global_models import NodeFormat
 
 
 class GraphNode(BaseModel):
@@ -198,8 +200,8 @@ class LineageNode(BaseModel):
 class GraphMetadata(BaseModel):
     """Metadata about the lineage graph."""
 
-    node_format: Literal["qualified", "structured"] = Field(
-        default="qualified",
+    node_format: NodeFormat = Field(
+        default=NodeFormat.QUALIFIED,
         description="Format of node identifiers in serialized output",
     )
     default_dialect: str = Field(

@@ -8,6 +8,7 @@ from tempfile import NamedTemporaryFile
 
 from rich.console import Console
 
+from sqlglider.global_models import AnalysisLevel
 from sqlglider.lineage.analyzer import (
     LineageItem,
     ObjectType,
@@ -53,7 +54,7 @@ class TestTextFormatter:
                         source_name="customers.name",
                     )
                 ],
-                level="column",
+                level=AnalysisLevel.COLUMN,
             )
         ]
 
@@ -83,7 +84,7 @@ class TestTextFormatter:
                         source_name="order_items.quantity",
                     ),
                 ],
-                level="column",
+                level=AnalysisLevel.COLUMN,
             )
         ]
 
@@ -107,7 +108,7 @@ class TestTextFormatter:
                         source_name="customers.id",
                     )
                 ],
-                level="column",
+                level=AnalysisLevel.COLUMN,
             ),
             QueryLineageResult(
                 metadata=QueryMetadata(
@@ -120,7 +121,7 @@ class TestTextFormatter:
                         source_name="products.id",
                     )
                 ],
-                level="column",
+                level=AnalysisLevel.COLUMN,
             ),
         ]
 
@@ -149,7 +150,7 @@ class TestTextFormatter:
                         source_name="orders",
                     ),
                 ],
-                level="table",
+                level=AnalysisLevel.TABLE,
             )
         ]
 
@@ -180,7 +181,7 @@ class TestTextFormatter:
                         source_name="",  # No source for literal
                     )
                 ],
-                level="column",
+                level=AnalysisLevel.COLUMN,
             )
         ]
 
@@ -201,7 +202,7 @@ class TestTextFormatter:
                     LineageItem(output_name="t.a", source_name="t.a"),
                     LineageItem(output_name="t.b", source_name="t.b"),
                 ],
-                level="column",
+                level=AnalysisLevel.COLUMN,
             )
         ]
 
@@ -227,7 +228,7 @@ class TestJsonFormatter:
                         source_name="customers.name",
                     )
                 ],
-                level="column",
+                level=AnalysisLevel.COLUMN,
             )
         ]
 
@@ -248,12 +249,12 @@ class TestJsonFormatter:
             QueryLineageResult(
                 metadata=QueryMetadata(query_index=0, query_preview="SELECT a FROM t1"),
                 lineage_items=[LineageItem(output_name="t1.a", source_name="t1.a")],
-                level="column",
+                level=AnalysisLevel.COLUMN,
             ),
             QueryLineageResult(
                 metadata=QueryMetadata(query_index=1, query_preview="SELECT b FROM t2"),
                 lineage_items=[LineageItem(output_name="t2.b", source_name="t2.b")],
-                level="column",
+                level=AnalysisLevel.COLUMN,
             ),
         ]
 
@@ -278,7 +279,7 @@ class TestJsonFormatter:
                         source_name="customers",
                     )
                 ],
-                level="table",
+                level=AnalysisLevel.TABLE,
             )
         ]
 
@@ -307,7 +308,7 @@ class TestCsvFormatter:
                         source_name="customers.name",
                     )
                 ],
-                level="column",
+                level=AnalysisLevel.COLUMN,
             )
         ]
 
@@ -332,7 +333,7 @@ class TestCsvFormatter:
                         source_name="order_items.quantity",
                     ),
                 ],
-                level="column",
+                level=AnalysisLevel.COLUMN,
             )
         ]
 
@@ -351,12 +352,12 @@ class TestCsvFormatter:
             QueryLineageResult(
                 metadata=QueryMetadata(query_index=0, query_preview="SELECT a"),
                 lineage_items=[LineageItem(output_name="t1.a", source_name="t1.a")],
-                level="column",
+                level=AnalysisLevel.COLUMN,
             ),
             QueryLineageResult(
                 metadata=QueryMetadata(query_index=1, query_preview="SELECT b"),
                 lineage_items=[LineageItem(output_name="t2.b", source_name="t2.b")],
-                level="column",
+                level=AnalysisLevel.COLUMN,
             ),
         ]
 
@@ -377,7 +378,7 @@ class TestCsvFormatter:
                     LineageItem(output_name="query_result", source_name="customers"),
                     LineageItem(output_name="query_result", source_name="orders"),
                 ],
-                level="table",
+                level=AnalysisLevel.TABLE,
             )
         ]
 

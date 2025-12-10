@@ -25,6 +25,7 @@ This project uses `uv` for Python package management. Python 3.11+ is required.
 - Linting and formatting: `uv run ruff check`
 - Auto-fix issues: `uv run ruff check --fix`
 - Format code: `uv run ruff format`
+- Type checking: `uv run basedpyright`
 
 ### Testing
 - Run all tests: `uv run pytest`
@@ -49,6 +50,7 @@ This project uses `uv` for Python package management. Python 3.11+ is required.
 - **rustworkx**: High-performance graph library for cross-file lineage
 - **jinja2**: Template engine for SQL preprocessing
 - **ruff**: Fast Python linter and formatter (dev dependency)
+- **basedpyright**: Static type checker (dev dependency)
 - **pytest**: Testing framework (dev dependency)
 - **pytest-cov**: Coverage plugin for pytest (dev dependency)
 
@@ -341,7 +343,11 @@ output_format = "json"
    - CLI interface or command structure
 2. Update this file (CLAUDE.md) if you change development workflows
 3. Update README.md if you change user-facing features
-4. Run linter before committing: `uv run ruff check --fix && uv run ruff format`
+4. Run linter and type checker before committing:
+   ```bash
+   uv run ruff check --fix && uv run ruff format
+   uv run basedpyright
+   ```
 
 ### Adding New Features
 - **Add unit tests for new functionality** - This is MANDATORY

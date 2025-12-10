@@ -1,7 +1,7 @@
 """Graph query functionality for upstream/downstream analysis."""
 
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 import rustworkx as rx
 
@@ -105,7 +105,7 @@ class GraphQuerier:
 
         # Use dijkstra on reversed graph to get distances to all ancestors
         # Each edge has weight 1.0 for hop counting
-        distances: Dict[int, float] = rx.dijkstra_shortest_path_lengths(
+        distances = rx.dijkstra_shortest_path_lengths(
             self.rx_graph_reversed,
             node_idx,
             edge_cost_fn=lambda _: 1.0,
@@ -155,7 +155,7 @@ class GraphQuerier:
 
         # Use dijkstra on original graph to get distances to all descendants
         # Each edge has weight 1.0 for hop counting
-        distances: Dict[int, float] = rx.dijkstra_shortest_path_lengths(
+        distances = rx.dijkstra_shortest_path_lengths(
             self.rx_graph,
             node_idx,
             edge_cost_fn=lambda _: 1.0,
