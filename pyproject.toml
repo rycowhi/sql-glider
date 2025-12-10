@@ -60,6 +60,7 @@ package = true
 
 [dependency-groups]
 dev = [
+    "basedpyright>=1.36.0",
     "pytest>=9.0.1",
     "pytest-cov>=7.0.0",
     "ruff>=0.14.8",
@@ -106,6 +107,10 @@ exclude_lines = [
 #name = "testpypi"
 # url = "https://test.pypi.org/simple/"
 # publish-url = "https://test.pypi.org/legacy/"
+
+[tool.basedpyright]
+pythonVersion = "3.11"
+typeCheckingMode = "standard"
 
 [tool.ruff.lint]
 extend-select = ["I"]
