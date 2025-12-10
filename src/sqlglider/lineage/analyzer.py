@@ -1,7 +1,7 @@
 """Core lineage analysis using SQLGlot."""
 
 from enum import Enum
-from typing import Callable, Iterator, Literal, List, Optional, Set, Tuple
+from typing import Callable, Iterator, List, Literal, Optional, Set, Tuple
 
 from pydantic import BaseModel, Field
 from sqlglot import exp, parse

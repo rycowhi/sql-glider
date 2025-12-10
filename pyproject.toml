@@ -107,6 +107,12 @@ exclude_lines = [
 # url = "https://test.pypi.org/simple/"
 # publish-url = "https://test.pypi.org/legacy/"
 
+[tool.ruff.lint]
+extend-select = ["I"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["sqlglider"]
+
 [[tool.uv.index]]
 name = "pypi"
 url = "https://pypi.org/simple/"

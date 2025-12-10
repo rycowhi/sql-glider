@@ -359,8 +359,8 @@ class TestConfigIntegration:
 
     def test_cli_uses_config_defaults(self, sample_sql_file):
         """Test that CLI uses config defaults when no args provided."""
-        from tempfile import TemporaryDirectory
         import os
+        from tempfile import TemporaryDirectory
 
         with TemporaryDirectory() as tmpdir:
             tmppath = Path(tmpdir)
@@ -394,8 +394,8 @@ output_format = "json"
 
     def test_cli_args_override_config(self, sample_sql_file):
         """Test that CLI args override config values."""
-        from tempfile import TemporaryDirectory
         import os
+        from tempfile import TemporaryDirectory
 
         with TemporaryDirectory() as tmpdir:
             tmppath = Path(tmpdir)
@@ -431,8 +431,8 @@ output_format = "json"
 
     def test_cli_missing_config_uses_defaults(self, sample_sql_file):
         """Test that CLI uses hardcoded defaults when config doesn't exist."""
-        from tempfile import TemporaryDirectory
         import os
+        from tempfile import TemporaryDirectory
 
         with TemporaryDirectory() as tmpdir:
             tmppath = Path(tmpdir)
@@ -457,8 +457,8 @@ output_format = "json"
 
     def test_cli_partial_config(self, sample_sql_file):
         """Test CLI with partial config (some fields set, others default)."""
-        from tempfile import TemporaryDirectory
         import os
+        from tempfile import TemporaryDirectory
 
         with TemporaryDirectory() as tmpdir:
             tmppath = Path(tmpdir)
@@ -490,8 +490,8 @@ dialect = "snowflake"
 
     def test_cli_priority_order(self, sample_sql_file):
         """Test priority order: CLI > config > default."""
-        from tempfile import TemporaryDirectory
         import os
+        from tempfile import TemporaryDirectory
 
         with TemporaryDirectory() as tmpdir:
             tmppath = Path(tmpdir)
@@ -539,8 +539,8 @@ output_format = "json"
 
     def test_cli_malformed_config_fallback(self, sample_sql_file):
         """Test that malformed config falls back to defaults."""
-        from tempfile import TemporaryDirectory
         import os
+        from tempfile import TemporaryDirectory
 
         with TemporaryDirectory() as tmpdir:
             tmppath = Path(tmpdir)
@@ -1595,7 +1595,9 @@ class TestStdinSupport:
 
     def test_tables_from_stdin(self):
         """Test tables command reads from stdin when no file provided."""
-        sql_content = "SELECT * FROM customers JOIN orders ON customers.id = orders.customer_id"
+        sql_content = (
+            "SELECT * FROM customers JOIN orders ON customers.id = orders.customer_id"
+        )
 
         result = runner.invoke(app, ["tables"], input=sql_content)
 
