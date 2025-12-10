@@ -102,11 +102,17 @@ exclude_lines = [
     "@abstractmethod",
 ]
 
+[[tool.uv.index]]
+name = "pypi"
+url = "https://pypi.org/simple/"
+publish-url = "https://upload.pypi.org/legacy/"
+
 # Publishing configuration for uv
-#[[tool.uv.index]]
-#name = "testpypi"
-#url = "https://test.pypi.org/simple/"
-#publish-url = "https://test.pypi.org/legacy/"
+[[tool.uv.index]]
+name = "testpypi"
+url = "https://test.pypi.org/simple/"
+publish-url = "https://test.pypi.org/legacy/"
+default = true
 
 [tool.basedpyright]
 pythonVersion = "3.11"
@@ -118,7 +124,3 @@ extend-select = ["I"]
 [tool.ruff.lint.isort]
 known-first-party = ["sqlglider"]
 
-[[tool.uv.index]]
-name = "pypi"
-url = "https://pypi.org/simple/"
-publish-url = "https://upload.pypi.org/legacy/"
