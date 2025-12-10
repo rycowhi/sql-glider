@@ -251,6 +251,30 @@ uv run sqlglider graph query graph.json --upstream orders.customer_id
 uv run sqlglider graph query graph.json --downstream customers.id
 ```
 
+**Example Upstream Query Output:**
+```
+                Sources for 'order_totals.total'
++--------------------------------------------------------------+
+| Column | Table  | Hops | Output Column      | File           |
+|--------+--------+------+--------------------+----------------|
+| amount | orders |    1 | order_totals.total | test_graph.sql |
++--------------------------------------------------------------+
+
+Total: 1 column(s)
+```
+
+**Example Downstream Query Output:**
+```
+              Affected Columns for 'orders.amount'
++---------------------------------------------------------------+
+| Column | Table        | Hops | Output Column | File           |
+|--------+--------------+------+---------------+----------------|
+| total  | order_totals |    1 | orders.amount | test_graph.sql |
++---------------------------------------------------------------+
+
+Total: 1 column(s)
+```
+
 **Manifest File Format:**
 ```csv
 file_path,dialect
