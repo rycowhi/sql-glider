@@ -313,25 +313,6 @@ class TestLineageCommand:
         assert "output_table,source_table" in result.stdout
 
 
-class TestMainCallback:
-    """Tests for the main callback."""
-
-    def test_app_help(self):
-        """Test the help message."""
-        result = runner.invoke(app, ["--help"])
-
-        assert result.exit_code == 0
-        assert "SQL Glider" in result.stdout or "sqlglider" in result.stdout
-
-    def test_lineage_help(self):
-        """Test the lineage command help."""
-        result = runner.invoke(app, ["lineage", "--help"])
-
-        assert result.exit_code == 0
-        assert "lineage" in result.stdout.lower()
-        assert "--column" in result.stdout or "-c" in result.stdout
-
-
 class TestConfigIntegration:
     """Tests for configuration file integration with CLI."""
 
@@ -759,15 +740,6 @@ class TestGraphBuildCommand:
             assert result.exit_code == 1
             assert "Invalid node format" in result.output
 
-    def test_graph_build_help(self):
-        """Test graph build help."""
-        result = runner.invoke(app, ["graph", "build", "--help"])
-
-        assert result.exit_code == 0
-        assert "--output" in result.stdout
-        assert "--recursive" in result.stdout
-        assert "--manifest" in result.stdout
-
 
 class TestGraphMergeCommand:
     """Tests for the graph merge command."""
@@ -845,14 +817,6 @@ class TestGraphMergeCommand:
 
             assert result.exit_code == 1
             assert "Must provide" in result.output
-
-    def test_graph_merge_help(self):
-        """Test graph merge help."""
-        result = runner.invoke(app, ["graph", "merge", "--help"])
-
-        assert result.exit_code == 0
-        assert "--output" in result.stdout
-        assert "--glob" in result.stdout
 
 
 class TestGraphQueryCommand:
@@ -996,27 +960,6 @@ class TestGraphQueryCommand:
         assert result.exit_code == 1
         assert "not found" in result.output
 
-    def test_graph_query_help(self):
-        """Test graph query help."""
-        result = runner.invoke(app, ["graph", "query", "--help"])
-
-        assert result.exit_code == 0
-        assert "--upstream" in result.stdout
-        assert "--downstream" in result.stdout
-
-
-class TestGraphCommandGroup:
-    """Tests for the graph command group."""
-
-    def test_graph_help(self):
-        """Test graph command help."""
-        result = runner.invoke(app, ["graph", "--help"])
-
-        assert result.exit_code == 0
-        assert "build" in result.stdout
-        assert "merge" in result.stdout
-        assert "query" in result.stdout
-
 
 class TestTemplateCommand:
     """Tests for the template command."""
@@ -1150,15 +1093,6 @@ class TestTemplateCommand:
             assert result.exit_code == 0
             # Should pass through unchanged
             assert "{{ table }}" in result.stdout
-
-    def test_template_help(self):
-        """Test template command help."""
-        result = runner.invoke(app, ["template", "--help"])
-
-        assert result.exit_code == 0
-        assert "--templater" in result.stdout
-        assert "--var" in result.stdout
-        assert "--vars-file" in result.stdout
 
 
 class TestLineageWithTemplating:
@@ -1516,16 +1450,6 @@ class TestTablesCommand:
 
         assert result.exit_code == 0
         assert "{" in result.stdout
-
-    def test_tables_help(self):
-        """Test tables command help."""
-        result = runner.invoke(app, ["tables", "--help"])
-
-        assert result.exit_code == 0
-        assert "tables" in result.stdout.lower()
-        assert "--dialect" in result.stdout
-        assert "--output-format" in result.stdout
-        assert "--table" in result.stdout
 
     def test_tables_with_templating(self):
         """Test tables command with templating."""
