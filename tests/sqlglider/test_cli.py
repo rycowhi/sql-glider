@@ -761,10 +761,7 @@ class TestGraphBuildCommand:
 
     def test_graph_build_help(self):
         """Test graph build help."""
-        # Use color=False to disable ANSI escape codes in help output.
-        # Rich/Typer inserts escape codes that split option names (e.g., "--output"
-        # becomes "\x1b[1;36m-\x1b[0m\x1b[1;36m-output\x1b[0m"), breaking substring checks.
-        result = runner.invoke(app, ["graph", "build", "--help"], color=False)
+        result = runner.invoke(app, ["graph", "build", "--help"])
 
         assert result.exit_code == 0
         assert "--output" in result.stdout
@@ -851,8 +848,7 @@ class TestGraphMergeCommand:
 
     def test_graph_merge_help(self):
         """Test graph merge help."""
-        # Use color=False to disable ANSI escape codes in help output.
-        result = runner.invoke(app, ["graph", "merge", "--help"], color=False)
+        result = runner.invoke(app, ["graph", "merge", "--help"])
 
         assert result.exit_code == 0
         assert "--output" in result.stdout
@@ -1002,8 +998,7 @@ class TestGraphQueryCommand:
 
     def test_graph_query_help(self):
         """Test graph query help."""
-        # Use color=False to disable ANSI escape codes in help output.
-        result = runner.invoke(app, ["graph", "query", "--help"], color=False)
+        result = runner.invoke(app, ["graph", "query", "--help"])
 
         assert result.exit_code == 0
         assert "--upstream" in result.stdout
@@ -1158,8 +1153,7 @@ class TestTemplateCommand:
 
     def test_template_help(self):
         """Test template command help."""
-        # Use color=False to disable ANSI escape codes in help output.
-        result = runner.invoke(app, ["template", "--help"], color=False)
+        result = runner.invoke(app, ["template", "--help"])
 
         assert result.exit_code == 0
         assert "--templater" in result.stdout
@@ -1525,8 +1519,7 @@ class TestTablesCommand:
 
     def test_tables_help(self):
         """Test tables command help."""
-        # Use color=False to disable ANSI escape codes in help output.
-        result = runner.invoke(app, ["tables", "--help"], color=False)
+        result = runner.invoke(app, ["tables", "--help"])
 
         assert result.exit_code == 0
         assert "tables" in result.stdout.lower()

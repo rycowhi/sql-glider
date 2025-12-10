@@ -55,4 +55,8 @@ jobs:
         run: uv sync --dev
 
       - name: Run tests with coverage
+        # NO_COLOR disables Rich/Typer ANSI escape codes that break CLI help output tests.
+        # Without this, options like "--output" get split by color codes, failing substring checks.
+        env:
+          NO_COLOR: "1"
         run: uv run pytest --cov=sqlglider --cov-report=term-missing --cov-fail-under=80
