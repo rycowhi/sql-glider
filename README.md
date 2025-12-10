@@ -45,13 +45,13 @@ uv run sqlglider lineage query.sql --column customer_name
 
 **Example Output:**
 ```
-==========
-Query 0: SELECT customer_name, o.order_total FROM customers c JOIN orders o ...
-==========
-----------
-customer_name
-----------
-c.customer_name
+       Query 0: SELECT customer_name, o.order_total FROM customers c JOIN orders o ...
++-----------------------------------------------------------------------------+
+| Output Column   | Source Column                                             |
+|-----------------+------------------------------------------------------------|
+| customer_name   | c.customer_name                                           |
++-----------------------------------------------------------------------------+
+Total: 1 row(s)
 ```
 
 This shows that the output column `customer_name` in Query 0 comes from `c.customer_name` (the `customer_name` column in table `c`).
@@ -67,17 +67,16 @@ uv run sqlglider lineage query.sql --source-column orders.customer_id
 
 **Example Output:**
 ```
-==========
-Query 0: SELECT customer_id, segment FROM ...
-==========
-----------
-orders.customer_id
-----------
-customer_id
-segment
+          Query 0: SELECT customer_id, segment FROM ...
++---------------------------------------------------------+
+| Output Column      | Source Column                      |
+|--------------------+------------------------------------|
+| orders.customer_id | orders.customer_id                 |
++---------------------------------------------------------+
+Total: 1 row(s)
 ```
 
-This shows that if `orders.customer_id` changes, it will impact the output columns `customer_id` and `segment` in Query 0.
+This shows that if `orders.customer_id` changes, it will impact the output column `customer_id` in Query 0.
 
 ## Usage Examples
 
@@ -199,19 +198,29 @@ JOIN orders o ON c.customer_id = o.customer_id;
 
 **Output includes query index for each statement:**
 ```
-==========
-Query 0: SELECT customer_id, customer_name FROM customers
-==========
-...
+   Query 0: SELECT customer_id, customer_name FROM customers
++---------------------------------------------------+
+| Output Column           | Source Column           |
+|-------------------------+-------------------------|
+| customers.customer_id   | customers.customer_id   |
+| customers.customer_name | customers.customer_name |
++---------------------------------------------------+
+Total: 2 row(s)
 
-==========
-Query 1: SELECT order_id, customer_id, order_total FROM orders
-==========
-...
+       Query 1: SELECT order_id, customer_id, order_total FROM orders
++---------------------------------------------+
+| Output Column      | Source Column          |
+|--------------------+------------------------|
+| orders.customer_id | orders.customer_id     |
+| orders.order_id    | orders.order_id        |
+| orders.order_total | orders.order_total     |
++---------------------------------------------+
+Total: 3 row(s)
 
-==========
-Query 2: INSERT INTO customer_orders ...
-==========
+       Query 2: INSERT INTO customer_orders ...
++---------------------------------------------+
+| Output Column      | Source Column          |
+|--------------------+------------------------|
 ...
 ```
 
@@ -298,16 +307,21 @@ SELECT customer_id, 'unknown' AS status FROM legacy_data
 ```
 
 ```bash
-uv run sqlglider lineage query.sql --column last_order_date
+uv run sqlglider lineage query.sql
 ```
 
 **Example Output:**
 ```
-+--------------------------------------------------+
-| Output Column   | Source Column                  |
-|-----------------+--------------------------------|
-| last_order_date | active_customers.last_order_date |
-|                 | <literal: NULL>                |
+       Query 0: SELECT customer_id, last_order_date FROM active_customers ...
++---------------------------------------------------------------------+
+| Output Column                    | Source Column                    |
+|----------------------------------+----------------------------------|
+| active_customers.customer_id     | active_customers.customer_id     |
+|                                  | prospects.customer_id            |
+| active_customers.last_order_date | <literal: NULL>                  |
+|                                  | active_customers.last_order_date |
++---------------------------------------------------------------------+
+Total: 4 row(s)
 ```
 
 Literal values are displayed as `<literal: VALUE>` to clearly distinguish them from actual column sources:
@@ -444,16 +458,16 @@ Options:
 
 ### Text Format (Default)
 
-Human-readable format with clear separators showing query index and preview:
+Human-readable Rich table format showing query index and preview:
 
 ```
-==========
-Query 0: SELECT customer_name FROM customers c ...
-==========
-----------
-customer_name
-----------
-c.customer_name
+       Query 0: SELECT customer_name FROM customers c ...
++---------------------------------------------------+
+| Output Column   | Source Column                   |
+|-----------------+---------------------------------|
+| customer_name   | c.customer_name                 |
++---------------------------------------------------+
+Total: 1 row(s)
 ```
 
 ### JSON Format
