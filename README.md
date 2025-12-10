@@ -253,27 +253,32 @@ uv run sqlglider graph query graph.json --downstream customers.id
 
 **Example Upstream Query Output:**
 ```
-                Sources for 'order_totals.total'
-+--------------------------------------------------------------+
-| Column | Table  | Hops | Output Column      | File           |
-|--------+--------+------+--------------------+----------------|
-| amount | orders |    1 | order_totals.total | test_graph.sql |
-+--------------------------------------------------------------+
+                              Sources for 'order_totals.total'
++--------------------------------------------------------------------------------------------+
+| Column | Table  | Hops | Root | Leaf | Paths                              | File           |
+|--------+--------+------+------+------+------------------------------------+----------------|
+| amount | orders |    1 |  Y   |  N   | orders.amount -> order_totals.total| test_graph.sql |
++--------------------------------------------------------------------------------------------+
 
 Total: 1 column(s)
 ```
 
 **Example Downstream Query Output:**
 ```
-              Affected Columns for 'orders.amount'
-+---------------------------------------------------------------+
-| Column | Table        | Hops | Output Column | File           |
-|--------+--------------+------+---------------+----------------|
-| total  | order_totals |    1 | orders.amount | test_graph.sql |
-+---------------------------------------------------------------+
+                             Affected Columns for 'orders.amount'
++--------------------------------------------------------------------------------------------+
+| Column | Table        | Hops | Root | Leaf | Paths                              | File           |
+|--------+--------------+------+------+------+------------------------------------+----------------|
+| total  | order_totals |    1 |  N   |  Y   | orders.amount -> order_totals.total| test_graph.sql |
++--------------------------------------------------------------------------------------------+
 
 Total: 1 column(s)
 ```
+
+**Output Fields:**
+- **Root**: `Y` if the column has no upstream dependencies (source column)
+- **Leaf**: `Y` if the column has no downstream dependencies (final output)
+- **Paths**: All paths from the dependency to the queried column
 
 **Manifest File Format:**
 ```csv
