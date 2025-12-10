@@ -1119,14 +1119,16 @@ def _format_query_result_csv(result) -> None:
     for node in result.related_columns:
         file_path = node.file_path.replace('"', '""') if node.file_path else ""
         # Format paths as semicolon-separated arrow strings
-        paths_str = ";".join(p.to_arrow_string() for p in node.paths) if node.paths else ""
+        paths_str = (
+            ";".join(p.to_arrow_string() for p in node.paths) if node.paths else ""
+        )
         paths_str = paths_str.replace('"', '""')
 
         print(
             f'"{node.identifier}","{node.table or ""}","{node.column or ""}",'
             f'{node.hops},"{node.output_column}",'
-            f'{"true" if node.is_root else "false"},'
-            f'{"true" if node.is_leaf else "false"},'
+            f"{'true' if node.is_root else 'false'},"
+            f"{'true' if node.is_leaf else 'false'},"
             f'"{paths_str}","{file_path}",{node.query_index}'
         )
 
