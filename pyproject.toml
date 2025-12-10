@@ -103,10 +103,10 @@ exclude_lines = [
 ]
 
 # Publishing configuration for uv
-# [[tool.uv.index]]
+#[[tool.uv.index]]
 #name = "testpypi"
-# url = "https://test.pypi.org/simple/"
-# publish-url = "https://test.pypi.org/legacy/"
+#url = "https://test.pypi.org/simple/"
+#publish-url = "https://test.pypi.org/legacy/"
 
 [tool.basedpyright]
 pythonVersion = "3.11"
