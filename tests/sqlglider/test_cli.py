@@ -10,13 +10,6 @@ from sqlglider.cli import app
 
 runner = CliRunner()
 
-# Runner with color disabled for testing help output.
-# Rich/Typer inserts ANSI escape codes (e.g., \x1b[1;36m) that split option names
-# like "--output" into "\x1b[1;36m-\x1b[0m\x1b[1;36m-output\x1b[0m", causing simple
-# substring checks to fail. This is especially problematic in CI environments
-# where terminal detection may differ from local development.
-runner_no_color = CliRunner(env={"NO_COLOR": "1"})
-
 
 class TestLineageCommand:
     """Tests for the lineage command."""
@@ -768,7 +761,10 @@ class TestGraphBuildCommand:
 
     def test_graph_build_help(self):
         """Test graph build help."""
-        result = runner_no_color.invoke(app, ["graph", "build", "--help"])
+        # Use color=False to disable ANSI escape codes in help output.
+        # Rich/Typer inserts escape codes that split option names (e.g., "--output"
+        # becomes "\x1b[1;36m-\x1b[0m\x1b[1;36m-output\x1b[0m"), breaking substring checks.
+        result = runner.invoke(app, ["graph", "build", "--help"], color=False)
 
         assert result.exit_code == 0
         assert "--output" in result.stdout
@@ -855,7 +851,8 @@ class TestGraphMergeCommand:
 
     def test_graph_merge_help(self):
         """Test graph merge help."""
-        result = runner_no_color.invoke(app, ["graph", "merge", "--help"])
+        # Use color=False to disable ANSI escape codes in help output.
+        result = runner.invoke(app, ["graph", "merge", "--help"], color=False)
 
         assert result.exit_code == 0
         assert "--output" in result.stdout
@@ -1005,7 +1002,8 @@ class TestGraphQueryCommand:
 
     def test_graph_query_help(self):
         """Test graph query help."""
-        result = runner_no_color.invoke(app, ["graph", "query", "--help"])
+        # Use color=False to disable ANSI escape codes in help output.
+        result = runner.invoke(app, ["graph", "query", "--help"], color=False)
 
         assert result.exit_code == 0
         assert "--upstream" in result.stdout
@@ -1160,7 +1158,8 @@ class TestTemplateCommand:
 
     def test_template_help(self):
         """Test template command help."""
-        result = runner_no_color.invoke(app, ["template", "--help"])
+        # Use color=False to disable ANSI escape codes in help output.
+        result = runner.invoke(app, ["template", "--help"], color=False)
 
         assert result.exit_code == 0
         assert "--templater" in result.stdout
@@ -1526,7 +1525,8 @@ class TestTablesCommand:
 
     def test_tables_help(self):
         """Test tables command help."""
-        result = runner_no_color.invoke(app, ["tables", "--help"])
+        # Use color=False to disable ANSI escape codes in help output.
+        result = runner.invoke(app, ["tables", "--help"], color=False)
 
         assert result.exit_code == 0
         assert "tables" in result.stdout.lower()
