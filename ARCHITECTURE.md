@@ -348,13 +348,38 @@ def merge_graphs(file_paths: List[Path]) -> LineageGraph
 #### Graph Querier (`graph/query.py`)
 
 ```python
+class LineagePath(BaseModel):
+    """Represents a path through the lineage graph."""
+    nodes: List[str]            # Ordered list of node identifiers
+
+    @property
+    def hops(self) -> int       # Number of edges in path (len(nodes) - 1)
+    def to_arrow_string(self) -> str  # Format as "a -> b -> c"
+
+class LineageNode(BaseModel):
+    """Extended node with query result context."""
+    # Fields from GraphNode
+    identifier: str
+    file_path: str
+    query_index: int
+    schema_name: Optional[str]
+    table: Optional[str]
+    column: Optional[str]
+
+    # Query result fields
+    hops: int                   # Shortest path distance from queried column
+    output_column: str          # The column that was queried
+    is_root: bool               # True if node has no upstream dependencies
+    is_leaf: bool               # True if node has no downstream dependencies
+    paths: List[LineagePath]    # All paths from this node to queried column
+
 class LineageQueryResult:
     query_column: str           # Column that was queried
     direction: str              # "upstream" or "downstream"
-    related_columns: List[GraphNode]  # Related columns found
+    related_columns: List[LineageNode]  # Related columns with paths and root/leaf info
 
     def __len__(self) -> int
-    def __iter__(self) -> Iterator[GraphNode]
+    def __iter__(self) -> Iterator[LineageNode]
 
 class GraphQuerier:
     def __init__(self, graph: LineageGraph)
@@ -368,10 +393,12 @@ class GraphQuerier:
 ```
 
 **Key Features:**
-- Uses `rustworkx.ancestors()` for upstream queries
-- Uses `rustworkx.descendants()` for downstream queries
+- Uses `rustworkx.dijkstra_shortest_path_lengths()` for hop counting
+- Uses `rustworkx.all_simple_paths()` for path tracking
+- Root detection via `in_degree == 0`, leaf detection via `out_degree == 0`
 - Case-insensitive column matching
 - Results sorted alphabetically by identifier
+- All paths from each dependency to the queried column are included
 
 #### Serialization (`graph/serialization.py`)
 

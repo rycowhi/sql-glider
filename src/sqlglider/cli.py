@@ -1063,15 +1063,24 @@ def _format_query_result_text(result) -> None:
     table.add_column("Column", style="cyan")
     table.add_column("Table", style="green")
     table.add_column("Hops", style="yellow", justify="right")
-    table.add_column("Output Column", style="magenta")
+    table.add_column("Root", style="magenta", justify="center")
+    table.add_column("Leaf", style="magenta", justify="center")
+    table.add_column("Paths", style="dim")
     table.add_column("File", style="dim")
 
     for node in result.related_columns:
+        # Format paths as newline-separated arrow strings
+        paths_str = (
+            "\n".join(p.to_arrow_string() for p in node.paths) if node.paths else "-"
+        )
+
         table.add_row(
             node.column or node.identifier,
             node.table or "",
             str(node.hops),
-            node.output_column,
+            "Y" if node.is_root else "N",
+            "Y" if node.is_leaf else "N",
+            paths_str,
             Path(node.file_path).name if node.file_path else "",
         )
 
@@ -1086,23 +1095,39 @@ def _format_query_result_text(result) -> None:
 
 def _format_query_result_json(result) -> None:
     """Format query result as JSON."""
+    columns = []
+    for node in result.related_columns:
+        node_data = node.model_dump()
+        # Serialize paths as arrays of node identifiers for cleaner output
+        node_data["paths"] = [p.nodes for p in node.paths]
+        columns.append(node_data)
+
     output = {
         "query_column": result.query_column,
         "direction": result.direction,
         "count": len(result),
-        "columns": [node.model_dump() for node in result.related_columns],
+        "columns": columns,
     }
     print(json.dumps(output, indent=2))
 
 
 def _format_query_result_csv(result) -> None:
     """Format query result as CSV."""
-    print("identifier,table,column,hops,output_column,file_path,query_index")
+    print(
+        "identifier,table,column,hops,output_column,is_root,is_leaf,paths,file_path,query_index"
+    )
     for node in result.related_columns:
         file_path = node.file_path.replace('"', '""') if node.file_path else ""
+        # Format paths as semicolon-separated arrow strings
+        paths_str = ";".join(p.to_arrow_string() for p in node.paths) if node.paths else ""
+        paths_str = paths_str.replace('"', '""')
+
         print(
             f'"{node.identifier}","{node.table or ""}","{node.column or ""}",'
-            f'{node.hops},"{node.output_column}","{file_path}",{node.query_index}'
+            f'{node.hops},"{node.output_column}",'
+            f'{"true" if node.is_root else "false"},'
+            f'{"true" if node.is_leaf else "false"},'
+            f'"{paths_str}","{file_path}",{node.query_index}'
         )
 
 

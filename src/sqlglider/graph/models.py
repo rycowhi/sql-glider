@@ -143,6 +143,23 @@ class Manifest(BaseModel):
         return cls(entries=entries)
 
 
+class LineagePath(BaseModel):
+    """A single lineage path from a node to the queried column."""
+
+    nodes: List[str] = Field(
+        ..., description="Ordered list of node identifiers in the path"
+    )
+
+    @property
+    def hops(self) -> int:
+        """Number of hops in the path (edges traversed)."""
+        return len(self.nodes) - 1 if len(self.nodes) > 1 else 0
+
+    def to_arrow_string(self) -> str:
+        """Format path as arrow-separated string for display."""
+        return " -> ".join(self.nodes)
+
+
 class LineageNode(BaseModel):
     """
     A node in lineage query results with additional context.
@@ -167,12 +184,27 @@ class LineageNode(BaseModel):
     hops: int = Field(..., description="Number of hops from the queried column")
     output_column: str = Field(..., description="The column that was queried")
 
+    # Path tracking and root/leaf detection fields
+    is_root: bool = Field(
+        default=False, description="True if node has no upstream dependencies"
+    )
+    is_leaf: bool = Field(
+        default=False, description="True if node has no downstream dependencies"
+    )
+    paths: List[LineagePath] = Field(
+        default_factory=list,
+        description="All paths from this node to the queried column",
+    )
+
     @classmethod
     def from_graph_node(
         cls,
         node: "GraphNode",
         hops: int,
         output_column: str,
+        is_root: bool = False,
+        is_leaf: bool = False,
+        paths: Optional[List[LineagePath]] = None,
     ) -> "LineageNode":
         """
         Create a LineageNode from a GraphNode with additional context.
@@ -181,9 +213,12 @@ class LineageNode(BaseModel):
             node: The underlying GraphNode
             hops: Number of hops from the query column
             output_column: The column that was queried
+            is_root: True if node has no upstream dependencies
+            is_leaf: True if node has no downstream dependencies
+            paths: List of all paths from this node to the queried column
 
         Returns:
-            LineageNode with all GraphNode fields plus hops and output_column
+            LineageNode with all GraphNode fields plus query context
         """
         return cls(
             identifier=node.identifier,
@@ -194,6 +229,9 @@ class LineageNode(BaseModel):
             column=node.column,
             hops=hops,
             output_column=output_column,
+            is_root=is_root,
+            is_leaf=is_leaf,
+            paths=paths or [],
         )
 
 

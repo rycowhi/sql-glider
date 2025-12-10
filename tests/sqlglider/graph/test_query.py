@@ -682,3 +682,498 @@ class TestHopCounting:
         assert len(result) == 2
         for node in result.related_columns:
             assert node.output_column == "target.col"
+
+
+class TestLineagePathModel:
+    """Tests for LineagePath Pydantic model."""
+
+    def test_hops_property(self):
+        """Test that hops is calculated correctly."""
+        from sqlglider.graph.models import LineagePath
+
+        path = LineagePath(nodes=["a.col", "b.col", "c.col"])
+        assert path.hops == 2
+
+    def test_hops_single_node(self):
+        """Test hops for single-node path."""
+        from sqlglider.graph.models import LineagePath
+
+        path = LineagePath(nodes=["a.col"])
+        assert path.hops == 0
+
+    def test_hops_empty_path(self):
+        """Test hops for empty path."""
+        from sqlglider.graph.models import LineagePath
+
+        path = LineagePath(nodes=[])
+        assert path.hops == 0
+
+    def test_to_arrow_string(self):
+        """Test arrow string formatting."""
+        from sqlglider.graph.models import LineagePath
+
+        path = LineagePath(nodes=["a.col", "b.col", "c.col"])
+        assert path.to_arrow_string() == "a.col -> b.col -> c.col"
+
+    def test_to_arrow_string_single_node(self):
+        """Test arrow string for single node."""
+        from sqlglider.graph.models import LineagePath
+
+        path = LineagePath(nodes=["a.col"])
+        assert path.to_arrow_string() == "a.col"
+
+    def test_model_dump(self):
+        """Test serialization."""
+        from sqlglider.graph.models import LineagePath
+
+        path = LineagePath(nodes=["a.col", "b.col"])
+        data = path.model_dump()
+        assert data["nodes"] == ["a.col", "b.col"]
+
+
+class TestPathTracking:
+    """Tests for path tracking in query results."""
+
+    def test_single_path_upstream(self):
+        """Test single path from source to target."""
+        # a -> b -> c
+        nodes = [
+            GraphNode.from_identifier("a.col", "/path/q.sql", 0),
+            GraphNode.from_identifier("b.col", "/path/q.sql", 0),
+            GraphNode.from_identifier("c.col", "/path/q.sql", 0),
+        ]
+        edges = [
+            GraphEdge(
+                source_node="a.col",
+                target_node="b.col",
+                file_path="/path/q.sql",
+                query_index=0,
+            ),
+            GraphEdge(
+                source_node="b.col",
+                target_node="c.col",
+                file_path="/path/q.sql",
+                query_index=0,
+            ),
+        ]
+        graph = LineageGraph(nodes=nodes, edges=edges)
+        querier = GraphQuerier(graph)
+
+        result = querier.find_upstream("c.col")
+
+        # Find node a.col and check its path
+        a_node = next(n for n in result.related_columns if n.identifier == "a.col")
+        assert len(a_node.paths) == 1
+        assert a_node.paths[0].nodes == ["a.col", "b.col", "c.col"]
+
+        # Find node b.col and check its path
+        b_node = next(n for n in result.related_columns if n.identifier == "b.col")
+        assert len(b_node.paths) == 1
+        assert b_node.paths[0].nodes == ["b.col", "c.col"]
+
+    def test_single_path_downstream(self):
+        """Test single path from source to target in downstream query."""
+        # a -> b -> c
+        nodes = [
+            GraphNode.from_identifier("a.col", "/path/q.sql", 0),
+            GraphNode.from_identifier("b.col", "/path/q.sql", 0),
+            GraphNode.from_identifier("c.col", "/path/q.sql", 0),
+        ]
+        edges = [
+            GraphEdge(
+                source_node="a.col",
+                target_node="b.col",
+                file_path="/path/q.sql",
+                query_index=0,
+            ),
+            GraphEdge(
+                source_node="b.col",
+                target_node="c.col",
+                file_path="/path/q.sql",
+                query_index=0,
+            ),
+        ]
+        graph = LineageGraph(nodes=nodes, edges=edges)
+        querier = GraphQuerier(graph)
+
+        result = querier.find_downstream("a.col")
+
+        # Find node c.col and check its path
+        c_node = next(n for n in result.related_columns if n.identifier == "c.col")
+        assert len(c_node.paths) == 1
+        assert c_node.paths[0].nodes == ["a.col", "b.col", "c.col"]
+
+        # Find node b.col and check its path
+        b_node = next(n for n in result.related_columns if n.identifier == "b.col")
+        assert len(b_node.paths) == 1
+        assert b_node.paths[0].nodes == ["a.col", "b.col"]
+
+    def test_multiple_paths_diamond(self):
+        """Test multiple paths in diamond graph."""
+        # a -> b -> d, a -> c -> d
+        nodes = [
+            GraphNode.from_identifier("a.col", "/path/q.sql", 0),
+            GraphNode.from_identifier("b.col", "/path/q.sql", 0),
+            GraphNode.from_identifier("c.col", "/path/q.sql", 0),
+            GraphNode.from_identifier("d.col", "/path/q.sql", 0),
+        ]
+        edges = [
+            GraphEdge(
+                source_node="a.col",
+                target_node="b.col",
+                file_path="/p.sql",
+                query_index=0,
+            ),
+            GraphEdge(
+                source_node="a.col",
+                target_node="c.col",
+                file_path="/p.sql",
+                query_index=0,
+            ),
+            GraphEdge(
+                source_node="b.col",
+                target_node="d.col",
+                file_path="/p.sql",
+                query_index=0,
+            ),
+            GraphEdge(
+                source_node="c.col",
+                target_node="d.col",
+                file_path="/p.sql",
+                query_index=0,
+            ),
+        ]
+        graph = LineageGraph(nodes=nodes, edges=edges)
+        querier = GraphQuerier(graph)
+
+        result = querier.find_upstream("d.col")
+
+        # Node a.col should have two paths to d.col
+        a_node = next(n for n in result.related_columns if n.identifier == "a.col")
+        assert len(a_node.paths) == 2
+
+        # Extract path nodes for comparison (order may vary)
+        path_sets = {tuple(p.nodes) for p in a_node.paths}
+        assert ("a.col", "b.col", "d.col") in path_sets
+        assert ("a.col", "c.col", "d.col") in path_sets
+
+    def test_paths_include_queried_column(self):
+        """Test that paths include the queried column."""
+        nodes = [
+            GraphNode.from_identifier("source.col", "/path/q.sql", 0),
+            GraphNode.from_identifier("target.col", "/path/q.sql", 0),
+        ]
+        edges = [
+            GraphEdge(
+                source_node="source.col",
+                target_node="target.col",
+                file_path="/path/q.sql",
+                query_index=0,
+            )
+        ]
+        graph = LineageGraph(nodes=nodes, edges=edges)
+        querier = GraphQuerier(graph)
+
+        result = querier.find_upstream("target.col")
+
+        assert len(result) == 1
+        assert len(result.related_columns[0].paths) == 1
+        # Path should include both source and target
+        assert "target.col" in result.related_columns[0].paths[0].nodes
+        assert "source.col" in result.related_columns[0].paths[0].nodes
+
+
+class TestRootLeafDetection:
+    """Tests for is_root and is_leaf flags."""
+
+    def test_is_root_for_source_column(self):
+        """Test that source columns (no incoming edges) are marked as root."""
+        # a -> b -> c: a should be is_root=True
+        nodes = [
+            GraphNode.from_identifier("a.col", "/path/q.sql", 0),
+            GraphNode.from_identifier("b.col", "/path/q.sql", 0),
+            GraphNode.from_identifier("c.col", "/path/q.sql", 0),
+        ]
+        edges = [
+            GraphEdge(
+                source_node="a.col",
+                target_node="b.col",
+                file_path="/path/q.sql",
+                query_index=0,
+            ),
+            GraphEdge(
+                source_node="b.col",
+                target_node="c.col",
+                file_path="/path/q.sql",
+                query_index=0,
+            ),
+        ]
+        graph = LineageGraph(nodes=nodes, edges=edges)
+        querier = GraphQuerier(graph)
+
+        result = querier.find_upstream("c.col")
+
+        a_node = next(n for n in result.related_columns if n.identifier == "a.col")
+        assert a_node.is_root is True
+
+    def test_is_leaf_for_output_column(self):
+        """Test that output columns (no outgoing edges) are marked as leaf."""
+        # a -> b -> c: c should be is_leaf=True
+        nodes = [
+            GraphNode.from_identifier("a.col", "/path/q.sql", 0),
+            GraphNode.from_identifier("b.col", "/path/q.sql", 0),
+            GraphNode.from_identifier("c.col", "/path/q.sql", 0),
+        ]
+        edges = [
+            GraphEdge(
+                source_node="a.col",
+                target_node="b.col",
+                file_path="/path/q.sql",
+                query_index=0,
+            ),
+            GraphEdge(
+                source_node="b.col",
+                target_node="c.col",
+                file_path="/path/q.sql",
+                query_index=0,
+            ),
+        ]
+        graph = LineageGraph(nodes=nodes, edges=edges)
+        querier = GraphQuerier(graph)
+
+        # Query downstream of a to get c in results
+        result = querier.find_downstream("a.col")
+
+        c_node = next(n for n in result.related_columns if n.identifier == "c.col")
+        assert c_node.is_leaf is True
+
+    def test_intermediate_node_not_root_or_leaf(self):
+        """Test that intermediate nodes are neither root nor leaf."""
+        # a -> b -> c: b should be is_root=False, is_leaf=False
+        nodes = [
+            GraphNode.from_identifier("a.col", "/path/q.sql", 0),
+            GraphNode.from_identifier("b.col", "/path/q.sql", 0),
+            GraphNode.from_identifier("c.col", "/path/q.sql", 0),
+        ]
+        edges = [
+            GraphEdge(
+                source_node="a.col",
+                target_node="b.col",
+                file_path="/path/q.sql",
+                query_index=0,
+            ),
+            GraphEdge(
+                source_node="b.col",
+                target_node="c.col",
+                file_path="/path/q.sql",
+                query_index=0,
+            ),
+        ]
+        graph = LineageGraph(nodes=nodes, edges=edges)
+        querier = GraphQuerier(graph)
+
+        result = querier.find_upstream("c.col")
+
+        b_node = next(n for n in result.related_columns if n.identifier == "b.col")
+        assert b_node.is_root is False
+        assert b_node.is_leaf is False
+
+    def test_both_bounds_checked_for_upstream(self):
+        """Test that upstream query checks both bounds.
+
+        For upstream query of c:
+        - a should be is_root=True (no upstream of a)
+        - c is the target, but nodes in result should reflect their global status
+        """
+        nodes = [
+            GraphNode.from_identifier("a.col", "/path/q.sql", 0),
+            GraphNode.from_identifier("b.col", "/path/q.sql", 0),
+            GraphNode.from_identifier("c.col", "/path/q.sql", 0),
+        ]
+        edges = [
+            GraphEdge(
+                source_node="a.col",
+                target_node="b.col",
+                file_path="/path/q.sql",
+                query_index=0,
+            ),
+            GraphEdge(
+                source_node="b.col",
+                target_node="c.col",
+                file_path="/path/q.sql",
+                query_index=0,
+            ),
+        ]
+        graph = LineageGraph(nodes=nodes, edges=edges)
+        querier = GraphQuerier(graph)
+
+        result = querier.find_upstream("c.col")
+
+        a_node = next(n for n in result.related_columns if n.identifier == "a.col")
+        b_node = next(n for n in result.related_columns if n.identifier == "b.col")
+
+        # a is a root (no incoming edges)
+        assert a_node.is_root is True
+        assert a_node.is_leaf is False
+
+        # b is neither root nor leaf
+        assert b_node.is_root is False
+        assert b_node.is_leaf is False
+
+    def test_both_bounds_checked_for_downstream(self):
+        """Test that downstream query checks both bounds.
+
+        For downstream query of a:
+        - c should be is_leaf=True (no downstream of c)
+        """
+        nodes = [
+            GraphNode.from_identifier("a.col", "/path/q.sql", 0),
+            GraphNode.from_identifier("b.col", "/path/q.sql", 0),
+            GraphNode.from_identifier("c.col", "/path/q.sql", 0),
+        ]
+        edges = [
+            GraphEdge(
+                source_node="a.col",
+                target_node="b.col",
+                file_path="/path/q.sql",
+                query_index=0,
+            ),
+            GraphEdge(
+                source_node="b.col",
+                target_node="c.col",
+                file_path="/path/q.sql",
+                query_index=0,
+            ),
+        ]
+        graph = LineageGraph(nodes=nodes, edges=edges)
+        querier = GraphQuerier(graph)
+
+        result = querier.find_downstream("a.col")
+
+        b_node = next(n for n in result.related_columns if n.identifier == "b.col")
+        c_node = next(n for n in result.related_columns if n.identifier == "c.col")
+
+        # b is neither root nor leaf
+        assert b_node.is_root is False
+        assert b_node.is_leaf is False
+
+        # c is a leaf (no outgoing edges)
+        assert c_node.is_root is False
+        assert c_node.is_leaf is True
+
+    def test_diamond_root_leaf(self):
+        """Test root/leaf detection in diamond graph."""
+        # a -> b -> d, a -> c -> d
+        # a is root, d is leaf, b and c are neither
+        nodes = [
+            GraphNode.from_identifier("a.col", "/path/q.sql", 0),
+            GraphNode.from_identifier("b.col", "/path/q.sql", 0),
+            GraphNode.from_identifier("c.col", "/path/q.sql", 0),
+            GraphNode.from_identifier("d.col", "/path/q.sql", 0),
+        ]
+        edges = [
+            GraphEdge(
+                source_node="a.col",
+                target_node="b.col",
+                file_path="/p.sql",
+                query_index=0,
+            ),
+            GraphEdge(
+                source_node="a.col",
+                target_node="c.col",
+                file_path="/p.sql",
+                query_index=0,
+            ),
+            GraphEdge(
+                source_node="b.col",
+                target_node="d.col",
+                file_path="/p.sql",
+                query_index=0,
+            ),
+            GraphEdge(
+                source_node="c.col",
+                target_node="d.col",
+                file_path="/p.sql",
+                query_index=0,
+            ),
+        ]
+        graph = LineageGraph(nodes=nodes, edges=edges)
+        querier = GraphQuerier(graph)
+
+        # Upstream of d
+        result = querier.find_upstream("d.col")
+
+        a_node = next(n for n in result.related_columns if n.identifier == "a.col")
+        b_node = next(n for n in result.related_columns if n.identifier == "b.col")
+        c_node = next(n for n in result.related_columns if n.identifier == "c.col")
+
+        assert a_node.is_root is True
+        assert a_node.is_leaf is False
+
+        assert b_node.is_root is False
+        assert b_node.is_leaf is False
+
+        assert c_node.is_root is False
+        assert c_node.is_leaf is False
+
+
+class TestLineageNodeWithPaths:
+    """Tests for extended LineageNode model with paths."""
+
+    def test_from_graph_node_with_paths(self):
+        """Test creating LineageNode with paths."""
+        from sqlglider.graph.models import LineagePath
+
+        graph_node = GraphNode.from_identifier("table.col", "/path/q.sql", 0)
+        paths = [LineagePath(nodes=["a.col", "b.col", "table.col"])]
+
+        lineage_node = LineageNode.from_graph_node(
+            graph_node,
+            hops=2,
+            output_column="target.col",
+            is_root=True,
+            is_leaf=False,
+            paths=paths,
+        )
+
+        assert lineage_node.is_root is True
+        assert lineage_node.is_leaf is False
+        assert len(lineage_node.paths) == 1
+        assert lineage_node.paths[0].nodes == ["a.col", "b.col", "table.col"]
+
+    def test_from_graph_node_default_values(self):
+        """Test default values for new fields."""
+        graph_node = GraphNode.from_identifier("table.col", "/path/q.sql", 0)
+
+        lineage_node = LineageNode.from_graph_node(
+            graph_node,
+            hops=1,
+            output_column="target.col",
+        )
+
+        assert lineage_node.is_root is False
+        assert lineage_node.is_leaf is False
+        assert lineage_node.paths == []
+
+    def test_model_dump_includes_new_fields(self):
+        """Test that model_dump includes is_root, is_leaf, paths."""
+        from sqlglider.graph.models import LineagePath
+
+        graph_node = GraphNode.from_identifier("table.col", "/path/q.sql", 0)
+        paths = [LineagePath(nodes=["a.col", "table.col"])]
+
+        lineage_node = LineageNode.from_graph_node(
+            graph_node,
+            hops=1,
+            output_column="target.col",
+            is_root=True,
+            is_leaf=True,
+            paths=paths,
+        )
+
+        data = lineage_node.model_dump()
+
+        assert data["is_root"] is True
+        assert data["is_leaf"] is True
+        assert len(data["paths"]) == 1
+        assert data["paths"][0]["nodes"] == ["a.col", "table.col"]
