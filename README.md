@@ -19,13 +19,35 @@ SQL Glider provides powerful column-level and table-level lineage analysis for S
 
 ## Installation
 
-This project uses `uv` for Python package management. Python 3.11+ is required.
+SQL Glider is available on PyPI and can be installed with pip or uv. Python 3.11+ is required.
 
 ```bash
-# Install dependencies
+# Install with pip
+pip install sql-glider
+
+# Or install with uv
+uv pip install sql-glider
+```
+
+After installation, the `sqlglider` command is available:
+
+```bash
+sqlglider lineage query.sql
+```
+
+### Development Setup
+
+If you want to contribute or run from source:
+
+```bash
+# Clone the repository
+git clone https://github.com/ryanholmdahl/sql-glider.git
+cd sql-glider
+
+# Install dependencies with uv
 uv sync
 
-# Run SQL Glider
+# Run from source
 uv run sqlglider lineage <sql_file>
 ```
 
