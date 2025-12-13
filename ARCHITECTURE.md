@@ -12,6 +12,11 @@ sql-glider/
 │   └── sqlglider/
 │       ├── __init__.py              # Package initialization
 │       ├── cli.py                   # Typer CLI entry point
+│       ├── dissection/
+│       │   ├── __init__.py          # Dissection module exports
+│       │   ├── models.py            # ComponentType, SQLComponent, QueryDissectionResult
+│       │   ├── analyzer.py          # DissectionAnalyzer for query decomposition
+│       │   └── formatters.py        # Output formatters (text, JSON, CSV)
 │       ├── graph/
 │       │   ├── __init__.py          # Graph module exports
 │       │   ├── models.py            # Pydantic models for graph data
@@ -32,6 +37,11 @@ sql-glider/
 │   ├── sqlglider/
 │   │   ├── __init__.py
 │   │   ├── test_cli.py              # CLI integration tests
+│   │   ├── dissection/
+│   │   │   ├── __init__.py
+│   │   │   ├── test_models.py       # Dissection model tests
+│   │   │   ├── test_analyzer.py     # DissectionAnalyzer tests
+│   │   │   └── test_formatters.py   # Dissection formatter tests
 │   │   ├── graph/
 │   │   │   ├── __init__.py
 │   │   │   ├── test_models.py       # Graph model tests
@@ -428,7 +438,123 @@ sqlglider graph query graph.json --upstream orders.customer_id
 sqlglider graph query graph.json --downstream customers.id -f json
 ```
 
-### 5. File Utilities (`utils/file_utils.py`)
+### 5. Dissection Module (`dissection/`)
+
+**Purpose:** Decompose SQL queries into constituent parts for unit testing and analysis
+
+The dissection module enables extracting components from SQL queries (CTEs, subqueries, UNION branches, etc.) so they can be tested individually or analyzed for structure.
+
+#### Data Models (`dissection/models.py`)
+
+```python
+class ComponentType(str, Enum):
+    """Type of SQL component extracted from a query."""
+    CTE = "CTE"                     # Common Table Expression
+    MAIN_QUERY = "MAIN_QUERY"       # Primary SELECT statement
+    SUBQUERY = "SUBQUERY"           # Nested SELECT in FROM clause
+    SCALAR_SUBQUERY = "SCALAR_SUBQUERY"  # Single-value subquery
+    TARGET_TABLE = "TARGET_TABLE"   # Output table for DML/DDL
+    SOURCE_QUERY = "SOURCE_QUERY"   # SELECT within DML/DDL
+    UNION_BRANCH = "UNION_BRANCH"   # Individual SELECT in UNION
+
+class SQLComponent(BaseModel):
+    """Represents an extracted SQL component."""
+    component_type: ComponentType
+    component_index: int           # Sequential order within query
+    name: Optional[str] = None     # CTE name, alias, or target table
+    sql: str                       # Extracted SQL for this component
+    parent_index: Optional[int] = None  # Index of parent component
+    depth: int = 0                 # Nesting level (0 = top-level)
+    is_executable: bool = True     # Can run standalone?
+    dependencies: List[str] = []   # CTE names this depends on
+    location: str = ""             # Human-readable location context
+
+class QueryMetadata(BaseModel):
+    """Metadata about a dissected query."""
+    query_index: int               # 0-based index in multi-query file
+    query_preview: str             # First 100 chars of query
+    statement_type: str            # SELECT, INSERT, CREATE, etc.
+    total_components: int          # Number of components extracted
+
+class QueryDissectionResult(BaseModel):
+    """Complete dissection result for a single query."""
+    metadata: QueryMetadata
+    components: List[SQLComponent]
+    original_sql: str              # Full original SQL for reference
+
+    def get_component_by_name(self, name: str) -> Optional[SQLComponent]
+    def get_components_by_type(self, component_type: ComponentType) -> List[SQLComponent]
+    def get_executable_components(self) -> List[SQLComponent]
+```
+
+#### Dissection Analyzer (`dissection/analyzer.py`)
+
+```python
+class DissectionAnalyzer:
+    def __init__(self, sql: str, dialect: str = "spark")
+    def dissect_queries(self) -> List[QueryDissectionResult]
+```
+
+**Extraction Order:**
+1. CTEs (by declaration order)
+2. TARGET_TABLE (for INSERT/CREATE/MERGE)
+3. SOURCE_QUERY (for DML/DDL statements)
+4. MAIN_QUERY (with full SQL including WITH clause)
+5. UNION_BRANCHES (if MAIN_QUERY is a UNION)
+6. SUBQUERIES (depth-first from FROM clauses)
+7. SCALAR_SUBQUERIES (from SELECT list, WHERE, HAVING)
+
+**Key Features:**
+- Uses SQLGlot AST traversal for accurate extraction
+- Tracks CTE dependencies by finding table references matching CTE names
+- UNION flattening extracts all branches from nested UNION expressions
+- Parent-child relationships via `parent_index` and `depth`
+- `location` field provides human-readable context (e.g., "SELECT list in CTE 'customer_segments'")
+
+#### Formatters (`dissection/formatters.py`)
+
+```python
+class DissectionTextFormatter:
+    @staticmethod
+    def format(results: List[QueryDissectionResult], console: Console) -> None
+
+class DissectionJsonFormatter:
+    @staticmethod
+    def format(results: List[QueryDissectionResult]) -> str
+
+class DissectionCsvFormatter:
+    @staticmethod
+    def format(results: List[QueryDissectionResult]) -> str
+```
+
+**Output Formats:**
+- **Text:** Rich table with columns for Index, Type, Name, Depth, Executable, Location, SQL Preview
+- **JSON:** Full structured data with all component details
+- **CSV:** Flattened format with semicolon-separated dependencies
+
+#### CLI Command
+
+```bash
+# Dissect a SQL file
+sqlglider dissect query.sql
+
+# JSON output
+sqlglider dissect query.sql --output-format json
+
+# CSV output
+sqlglider dissect query.sql --output-format csv
+
+# Export to file
+sqlglider dissect query.sql -f json -o dissected.json
+
+# From stdin
+echo "WITH cte AS (SELECT id FROM users) SELECT * FROM cte" | sqlglider dissect
+
+# With templating
+sqlglider dissect query.sql --templater jinja --var schema=analytics
+```
+
+### 6. File Utilities (`utils/file_utils.py`)
 
 **Purpose:** File I/O operations with proper error handling
 
@@ -442,7 +568,7 @@ def read_sql_file(file_path: Path) -> str
 - PermissionError: Cannot read file
 - UnicodeDecodeError: File not UTF-8 encoded
 
-### 5. Configuration System (`utils/config.py`)
+### 7. Configuration System (`utils/config.py`)
 
 **Purpose:** Load and manage configuration from `sqlglider.toml`
 

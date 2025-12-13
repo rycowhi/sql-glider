@@ -1133,5 +1133,190 @@ def _format_query_result_csv(result) -> None:
         )
 
 
+@app.command()
+def dissect(
+    sql_file: Annotated[
+        typer.FileText,
+        typer.Argument(
+            default_factory=lambda: sys.stdin,
+            show_default="stdin",
+            help="Path to SQL file to dissect (reads from stdin if not provided)",
+        ),
+    ],
+    dialect: Optional[str] = typer.Option(
+        None,
+        "--dialect",
+        "-d",
+        help="SQL dialect (default: spark, or from config)",
+    ),
+    output_format: Optional[str] = typer.Option(
+        None,
+        "--output-format",
+        "-f",
+        help="Output format: 'text', 'json', or 'csv' (default: text, or from config)",
+    ),
+    output_file: Optional[Path] = typer.Option(
+        None,
+        "--output-file",
+        "-o",
+        help="Write output to file instead of stdout",
+    ),
+    templater: Optional[str] = typer.Option(
+        None,
+        "--templater",
+        "-t",
+        help="Templater for SQL preprocessing (e.g., 'jinja', 'none')",
+    ),
+    var: Optional[List[str]] = typer.Option(
+        None,
+        "--var",
+        "-v",
+        help="Template variable in key=value format (repeatable)",
+    ),
+    vars_file: Optional[Path] = typer.Option(
+        None,
+        "--vars-file",
+        exists=True,
+        help="Path to variables file (JSON or YAML)",
+    ),
+) -> None:
+    """
+    Dissect SQL queries into constituent components.
+
+    Extracts CTEs, subqueries, main query, DML targets, source SELECTs,
+    UNION branches, and scalar subqueries for analysis and unit testing.
+
+    Configuration can be set in sqlglider.toml in the current directory.
+    CLI arguments override configuration file values.
+
+    Examples:
+
+        # Dissect a SQL file
+        sqlglider dissect query.sql
+
+        # Export to JSON format
+        sqlglider dissect query.sql --output-format json
+
+        # Export to CSV file
+        sqlglider dissect query.sql --output-format csv --output-file dissected.csv
+
+        # Use different SQL dialect
+        sqlglider dissect query.sql --dialect postgres
+
+        # Dissect templated SQL with Jinja2
+        sqlglider dissect query.sql --templater jinja --var schema=analytics
+    """
+    from sqlglider.dissection.analyzer import DissectionAnalyzer
+    from sqlglider.dissection.formatters import (
+        DissectionCsvFormatter,
+        DissectionJsonFormatter,
+        DissectionTextFormatter,
+        OutputWriter as DissectionOutputWriter,
+    )
+
+    # Load configuration from sqlglider.toml (if it exists)
+    config = load_config()
+
+    # Apply priority resolution: CLI args > config > defaults
+    dialect = dialect or config.dialect or "spark"
+    output_format = output_format or config.output_format or "text"
+    templater = templater or config.templater  # None means no templating
+
+    # Validate output format
+    if output_format not in ["text", "json", "csv"]:
+        err_console.print(
+            f"[red]Error:[/red] Invalid output format '{output_format}'. "
+            "Use 'text', 'json', or 'csv'."
+        )
+        raise typer.Exit(1)
+
+    # Check if reading from stdin
+    is_stdin = sql_file.name == "<stdin>"
+
+    try:
+        # Check if stdin is being used without input
+        if is_stdin and sys.stdin.isatty():
+            err_console.print(
+                "[red]Error:[/red] No SQL file provided and stdin is interactive. "
+                "Provide a SQL file path or pipe SQL via stdin."
+            )
+            raise typer.Exit(1)
+
+        # Read SQL from file or stdin
+        sql = sql_file.read()
+
+        # Determine source path for templating (None if stdin)
+        source_path = None if is_stdin else Path(sql_file.name)
+
+        # Apply templating if specified
+        sql = _apply_templating(
+            sql,
+            templater_name=templater,
+            cli_vars=var,
+            vars_file=vars_file,
+            config=config,
+            source_path=source_path,
+        )
+
+        # Create analyzer
+        analyzer = DissectionAnalyzer(sql, dialect=dialect)
+
+        # Dissect queries
+        results = analyzer.dissect_queries()
+
+        # Format and output based on output format
+        if output_format == "text":
+            if output_file:
+                # For file output, use a string-based console to capture output
+                from io import StringIO
+
+                from rich.console import Console as FileConsole
+
+                string_buffer = StringIO()
+                file_console = FileConsole(file=string_buffer, force_terminal=False)
+                DissectionTextFormatter.format(results, file_console)
+                output_file.write_text(string_buffer.getvalue(), encoding="utf-8")
+                console.print(
+                    f"[green]Success:[/green] Dissection written to {output_file}"
+                )
+            else:
+                # Direct console output with Rich formatting
+                DissectionTextFormatter.format(results, console)
+        elif output_format == "json":
+            formatted = DissectionJsonFormatter.format(results)
+            DissectionOutputWriter.write(formatted, output_file)
+            if output_file:
+                console.print(
+                    f"[green]Success:[/green] Dissection written to {output_file}"
+                )
+        else:  # csv
+            formatted = DissectionCsvFormatter.format(results)
+            DissectionOutputWriter.write(formatted, output_file)
+            if output_file:
+                console.print(
+                    f"[green]Success:[/green] Dissection written to {output_file}"
+                )
+
+    except FileNotFoundError as e:
+        err_console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+
+    except ParseError as e:
+        err_console.print(f"[red]Error:[/red] Failed to parse SQL: {e}")
+        raise typer.Exit(1)
+
+    except TemplaterError as e:
+        err_console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+
+    except ValueError as e:
+        err_console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+
+    except Exception as e:
+        err_console.print(f"[red]Error:[/red] Unexpected error: {e}")
+        raise typer.Exit(1)
+
+
 if __name__ == "__main__":
     app()

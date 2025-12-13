@@ -59,6 +59,10 @@ This project uses `uv` for Python package management. Python 3.11+ is required.
 ```
 src/sqlglider/
 ├── cli.py                    # Typer CLI entry point
+├── dissection/
+│   ├── analyzer.py           # DissectionAnalyzer for query decomposition
+│   ├── formatters.py         # Output formatters (text, JSON, CSV)
+│   └── models.py             # ComponentType, SQLComponent, QueryDissectionResult
 ├── graph/
 │   ├── builder.py            # Build lineage graphs from SQL files
 │   ├── merge.py              # Merge multiple graphs
@@ -292,6 +296,45 @@ SELECT * FROM cte
 2. Variables file (`--vars-file vars.json`)
 3. Config file (`[sqlglider.templating.variables]`)
 4. Environment variables (`SQLGLIDER_VAR_*`)
+
+### Query Dissection
+
+Decompose SQL queries into constituent parts for unit testing and analysis:
+
+```bash
+# Dissect a SQL file (text output)
+uv run sqlglider dissect query.sql
+
+# JSON output with full component details
+uv run sqlglider dissect query.sql --output-format json
+
+# CSV output for spreadsheet analysis
+uv run sqlglider dissect query.sql --output-format csv
+
+# Export to file
+uv run sqlglider dissect query.sql --output-format json --output-file dissected.json
+
+# With templating support
+uv run sqlglider dissect query.sql --templater jinja --var schema=analytics
+
+# From stdin
+echo "WITH cte AS (SELECT id FROM users) SELECT * FROM cte" | uv run sqlglider dissect
+```
+
+**Extracted Component Types:**
+- `CTE`: Common Table Expressions from WITH clause
+- `MAIN_QUERY`: The primary SELECT statement
+- `SUBQUERY`: Nested SELECT in FROM clause
+- `SCALAR_SUBQUERY`: Single-value subquery in SELECT list, WHERE, HAVING
+- `TARGET_TABLE`: Output table for INSERT/CREATE/MERGE (not executable)
+- `SOURCE_QUERY`: SELECT within DML/DDL statements
+- `UNION_BRANCH`: Individual SELECT in UNION/UNION ALL
+
+**Use Cases:**
+- Unit test CTEs and subqueries individually
+- Extract DQL from CTAS, CREATE VIEW, INSERT statements
+- Analyze query structure and component dependencies
+- Break apart complex queries for understanding
 
 ## Development Guidelines
 

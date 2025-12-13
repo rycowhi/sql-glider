@@ -10,6 +10,7 @@ SQL Glider provides powerful column-level and table-level lineage analysis for S
 
 - **Forward Lineage:** Trace output columns back to their source tables and columns
 - **Reverse Lineage:** Impact analysis - find which output columns are affected by a source column
+- **Query Dissection:** Decompose SQL into components (CTEs, subqueries, UNION branches) for unit testing
 - **Table Extraction:** List all tables in SQL files with usage type (INPUT/OUTPUT) and object type (TABLE/VIEW/CTE)
 - **Multi-level Tracing:** Automatically handles CTEs, subqueries, and complex expressions
 - **Graph-Based Lineage:** Build and query lineage graphs across thousands of SQL files
@@ -173,6 +174,94 @@ uv run sqlglider tables query.sql --output-format csv --output-file tables.csv
 - `VIEW`: CREATE VIEW or DROP VIEW statement
 - `CTE`: Common Table Expression (WITH clause)
 - `UNKNOWN`: Cannot determine type from SQL alone
+
+### Query Dissection
+
+Decompose SQL queries into constituent parts for unit testing and analysis:
+
+```bash
+# Dissect a SQL file (text output)
+uv run sqlglider dissect query.sql
+
+# JSON output with full component details
+uv run sqlglider dissect query.sql --output-format json
+
+# CSV output for spreadsheet analysis
+uv run sqlglider dissect query.sql --output-format csv
+
+# Export to file
+uv run sqlglider dissect query.sql -f json -o dissected.json
+
+# With templating support
+uv run sqlglider dissect query.sql --templater jinja --var schema=analytics
+
+# From stdin
+echo "WITH cte AS (SELECT id FROM users) SELECT * FROM cte" | uv run sqlglider dissect
+```
+
+**Example Input:**
+```sql
+WITH order_totals AS (
+    SELECT customer_id, SUM(amount) AS total
+    FROM orders
+    GROUP BY customer_id
+)
+INSERT INTO analytics.summary
+SELECT * FROM order_totals WHERE total > 100
+```
+
+**Example Output (JSON):**
+```json
+{
+  "queries": [{
+    "query_index": 0,
+    "statement_type": "INSERT",
+    "total_components": 3,
+    "components": [
+      {
+        "component_type": "CTE",
+        "component_index": 0,
+        "name": "order_totals",
+        "sql": "SELECT customer_id, SUM(amount) AS total FROM orders GROUP BY customer_id",
+        "is_executable": true,
+        "dependencies": [],
+        "location": "WITH clause"
+      },
+      {
+        "component_type": "TARGET_TABLE",
+        "component_index": 1,
+        "name": "analytics.summary",
+        "sql": "analytics.summary",
+        "is_executable": false,
+        "location": "INSERT INTO target"
+      },
+      {
+        "component_type": "SOURCE_QUERY",
+        "component_index": 2,
+        "sql": "SELECT * FROM order_totals WHERE total > 100",
+        "is_executable": true,
+        "dependencies": ["order_totals"],
+        "location": "INSERT source SELECT"
+      }
+    ]
+  }]
+}
+```
+
+**Extracted Component Types:**
+- `CTE`: Common Table Expressions from WITH clause
+- `MAIN_QUERY`: The primary SELECT statement
+- `SUBQUERY`: Nested SELECT in FROM clause
+- `SCALAR_SUBQUERY`: Single-value subquery in SELECT list, WHERE, HAVING
+- `TARGET_TABLE`: Output table for INSERT/CREATE/MERGE (not executable)
+- `SOURCE_QUERY`: SELECT within DML/DDL statements
+- `UNION_BRANCH`: Individual SELECT in UNION/UNION ALL
+
+**Use Cases:**
+- Unit test CTEs and subqueries individually
+- Extract DQL from CTAS, CREATE VIEW, INSERT statements
+- Analyze query structure and component dependencies
+- Break apart complex queries for understanding
 
 ### Different SQL Dialects
 
@@ -461,6 +550,35 @@ Options:
   --help                      Show help message and exit
 ```
 
+### Dissect Command
+
+```
+sqlglider dissect [sql_file] [OPTIONS]
+
+Arguments:
+  sql_file                    Path to SQL file to analyze [optional, reads from stdin if omitted]
+
+Options:
+  --dialect, -d               SQL dialect (spark, postgres, snowflake, etc.) [default: spark]
+  --output-format, -f         Output format: 'text', 'json', or 'csv' [default: text]
+  --output-file, -o           Write output to file instead of stdout [optional]
+  --templater, -t             Templater for SQL preprocessing (e.g., 'jinja', 'none') [optional]
+  --var, -v                   Template variable in key=value format (repeatable) [optional]
+  --vars-file                 Path to variables file (JSON or YAML) [optional]
+  --help                      Show help message and exit
+```
+
+**Output Fields:**
+- `component_type`: Type of component (CTE, MAIN_QUERY, SUBQUERY, etc.)
+- `component_index`: Sequential order within the query (0-based)
+- `name`: CTE name, subquery alias, or target table name
+- `sql`: The extracted SQL for this component
+- `is_executable`: Whether the component can run standalone (TARGET_TABLE is false)
+- `dependencies`: List of CTE names this component references
+- `location`: Human-readable context (e.g., "WITH clause", "FROM clause")
+- `depth`: Nesting level (0 = top-level)
+- `parent_index`: Index of parent component for nested components
+
 ### Graph Commands
 
 ```
@@ -582,6 +700,10 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed technical documentation.
 ```
 src/sqlglider/
 ├── cli.py                    # Typer CLI entry point
+├── dissection/
+│   ├── analyzer.py           # DissectionAnalyzer for query decomposition
+│   ├── formatters.py         # Output formatters (text, JSON, CSV)
+│   └── models.py             # ComponentType, SQLComponent, QueryDissectionResult
 ├── graph/
 │   ├── builder.py            # Build graphs from SQL files
 │   ├── merge.py              # Merge multiple graphs
