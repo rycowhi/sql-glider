@@ -1211,6 +1211,8 @@ def dissect(
         DissectionCsvFormatter,
         DissectionJsonFormatter,
         DissectionTextFormatter,
+    )
+    from sqlglider.dissection.formatters import (
         OutputWriter as DissectionOutputWriter,
     )
 
