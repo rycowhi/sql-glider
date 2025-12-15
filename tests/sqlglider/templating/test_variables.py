@@ -1,6 +1,5 @@
 """Tests for variable loading utilities."""
 
-import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -265,56 +264,39 @@ class TestParseCliVariables:
 class TestLoadEnvVariables:
     """Tests for load_env_variables function."""
 
-    def test_load_env_variables(self):
+    def test_load_env_variables(self, monkeypatch):
         """Test loading variables from environment."""
-        os.environ["SQLGLIDER_VAR_SCHEMA"] = "analytics"
-        os.environ["SQLGLIDER_VAR_TABLE"] = "users"
-        try:
-            result = load_env_variables()
-            assert result["schema"] == "analytics"
-            assert result["table"] == "users"
-        finally:
-            del os.environ["SQLGLIDER_VAR_SCHEMA"]
-            del os.environ["SQLGLIDER_VAR_TABLE"]
+        monkeypatch.setenv("SQLGLIDER_VAR_SCHEMA", "analytics")
+        monkeypatch.setenv("SQLGLIDER_VAR_TABLE", "users")
+        result = load_env_variables()
+        assert result["schema"] == "analytics"
+        assert result["table"] == "users"
 
-    def test_key_is_lowercased(self):
+    def test_key_is_lowercased(self, monkeypatch):
         """Test that environment variable names are lowercased."""
-        os.environ["SQLGLIDER_VAR_UPPER_CASE"] = "value"
-        try:
-            result = load_env_variables()
-            assert "upper_case" in result
-        finally:
-            del os.environ["SQLGLIDER_VAR_UPPER_CASE"]
+        monkeypatch.setenv("SQLGLIDER_VAR_UPPER_CASE", "value")
+        result = load_env_variables()
+        assert "upper_case" in result
 
-    def test_type_inference(self):
+    def test_type_inference(self, monkeypatch):
         """Test that types are inferred from env values."""
-        os.environ["SQLGLIDER_VAR_NUM"] = "42"
-        os.environ["SQLGLIDER_VAR_BOOL"] = "true"
-        try:
-            result = load_env_variables()
-            assert result["num"] == 42
-            assert result["bool"] is True
-        finally:
-            del os.environ["SQLGLIDER_VAR_NUM"]
-            del os.environ["SQLGLIDER_VAR_BOOL"]
+        monkeypatch.setenv("SQLGLIDER_VAR_NUM", "42")
+        monkeypatch.setenv("SQLGLIDER_VAR_BOOL", "true")
+        result = load_env_variables()
+        assert result["num"] == 42
+        assert result["bool"] is True
 
-    def test_custom_prefix(self):
+    def test_custom_prefix(self, monkeypatch):
         """Test with custom prefix."""
-        os.environ["CUSTOM_VAR_KEY"] = "value"
-        try:
-            result = load_env_variables(prefix="CUSTOM_VAR_")
-            assert result["key"] == "value"
-        finally:
-            del os.environ["CUSTOM_VAR_KEY"]
+        monkeypatch.setenv("CUSTOM_VAR_KEY", "value")
+        result = load_env_variables(prefix="CUSTOM_VAR_")
+        assert result["key"] == "value"
 
-    def test_ignores_non_matching_vars(self):
+    def test_ignores_non_matching_vars(self, monkeypatch):
         """Test that non-matching env vars are ignored."""
-        os.environ["OTHER_VAR"] = "ignored"
-        try:
-            result = load_env_variables()
-            assert "other_var" not in result
-        finally:
-            del os.environ["OTHER_VAR"]
+        monkeypatch.setenv("OTHER_VAR", "ignored")
+        result = load_env_variables()
+        assert "other_var" not in result
 
 
 class TestMergeVariables:
@@ -361,72 +343,58 @@ class TestMergeVariables:
 class TestLoadAllVariables:
     """Tests for load_all_variables function."""
 
-    def test_cli_vars_highest_priority(self):
+    def test_cli_vars_highest_priority(self, monkeypatch):
         """Test that CLI vars have highest priority."""
-        os.environ["SQLGLIDER_VAR_KEY"] = "env"
-        try:
-            result = load_all_variables(
-                cli_vars=["key=cli"],
-                config_vars={"key": "config"},
-                use_env=True,
-            )
-            assert result["key"] == "cli"
-        finally:
-            del os.environ["SQLGLIDER_VAR_KEY"]
+        monkeypatch.setenv("SQLGLIDER_VAR_KEY", "env")
+        result = load_all_variables(
+            cli_vars=["key=cli"],
+            config_vars={"key": "config"},
+            use_env=True,
+        )
+        assert result["key"] == "cli"
 
-    def test_file_over_config(self):
+    def test_file_over_config(self, tmp_path):
         """Test that file vars override config vars."""
-        with TemporaryDirectory() as tmpdir:
-            vars_file = Path(tmpdir) / "vars.json"
-            vars_file.write_text('{"key": "file"}')
+        vars_file = tmp_path / "vars.json"
+        vars_file.write_text('{"key": "file"}')
 
-            result = load_all_variables(
-                vars_file=vars_file,
-                config_vars={"key": "config"},
-                use_env=False,
-            )
-            assert result["key"] == "file"
+        result = load_all_variables(
+            vars_file=vars_file,
+            config_vars={"key": "config"},
+            use_env=False,
+        )
+        assert result["key"] == "file"
 
-    def test_config_over_env(self):
+    def test_config_over_env(self, monkeypatch):
         """Test that config vars override env vars."""
-        os.environ["SQLGLIDER_VAR_KEY"] = "env"
-        try:
-            result = load_all_variables(
-                config_vars={"key": "config"},
-                use_env=True,
-            )
-            assert result["key"] == "config"
-        finally:
-            del os.environ["SQLGLIDER_VAR_KEY"]
+        monkeypatch.setenv("SQLGLIDER_VAR_KEY", "env")
+        result = load_all_variables(
+            config_vars={"key": "config"},
+            use_env=True,
+        )
+        assert result["key"] == "config"
 
-    def test_env_disabled(self):
+    def test_env_disabled(self, monkeypatch):
         """Test that env vars are not loaded when disabled."""
-        os.environ["SQLGLIDER_VAR_KEY"] = "env"
-        try:
-            result = load_all_variables(use_env=False)
-            assert "key" not in result
-        finally:
-            del os.environ["SQLGLIDER_VAR_KEY"]
+        monkeypatch.setenv("SQLGLIDER_VAR_KEY", "env")
+        result = load_all_variables(use_env=False)
+        assert "key" not in result
 
-    def test_all_sources_combined(self):
+    def test_all_sources_combined(self, monkeypatch, tmp_path):
         """Test combining all sources."""
-        os.environ["SQLGLIDER_VAR_ENV_ONLY"] = "from_env"
-        try:
-            with TemporaryDirectory() as tmpdir:
-                vars_file = Path(tmpdir) / "vars.json"
-                vars_file.write_text('{"file_only": "from_file", "shared": "file"}')
+        monkeypatch.setenv("SQLGLIDER_VAR_ENV_ONLY", "from_env")
+        vars_file = tmp_path / "vars.json"
+        vars_file.write_text('{"file_only": "from_file", "shared": "file"}')
 
-                result = load_all_variables(
-                    cli_vars=["cli_only=from_cli", "shared=cli"],
-                    vars_file=vars_file,
-                    config_vars={"config_only": "from_config", "shared": "config"},
-                    use_env=True,
-                )
+        result = load_all_variables(
+            cli_vars=["cli_only=from_cli", "shared=cli"],
+            vars_file=vars_file,
+            config_vars={"config_only": "from_config", "shared": "config"},
+            use_env=True,
+        )
 
-                assert result["env_only"] == "from_env"
-                assert result["config_only"] == "from_config"
-                assert result["file_only"] == "from_file"
-                assert result["cli_only"] == "from_cli"
-                assert result["shared"] == "cli"  # CLI wins
-        finally:
-            del os.environ["SQLGLIDER_VAR_ENV_ONLY"]
+        assert result["env_only"] == "from_env"
+        assert result["config_only"] == "from_config"
+        assert result["file_only"] == "from_file"
+        assert result["cli_only"] == "from_cli"
+        assert result["shared"] == "cli"  # CLI wins

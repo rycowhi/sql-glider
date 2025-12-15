@@ -1,7 +1,6 @@
 """Tests for GraphMerger class."""
 
 from pathlib import Path
-from tempfile import NamedTemporaryFile, TemporaryDirectory
 
 import pytest
 
@@ -151,30 +150,23 @@ class TestGraphMergerDeduplication:
 class TestGraphMergerFileOperations:
     """Tests for file-based merge operations."""
 
-    def test_add_file(self):
+    def test_add_file(self, tmp_path):
         """Test adding graph from JSON file."""
         graph = LineageGraph(
             metadata=GraphMetadata(source_files=["/path/query.sql"]),
             nodes=[GraphNode.from_identifier("table.col", "/path/query.sql", 0)],
         )
 
-        with NamedTemporaryFile(
-            mode="w", suffix=".json", delete=False, encoding="utf-8"
-        ) as f:
-            temp_path = Path(f.name)
+        graph_file = tmp_path / "graph.json"
+        save_graph(graph, graph_file)
 
-        try:
-            save_graph(graph, temp_path)
+        merger = GraphMerger()
+        merger.add_file(graph_file)
+        merged = merger.merge()
 
-            merger = GraphMerger()
-            merger.add_file(temp_path)
-            merged = merger.merge()
+        assert merged.metadata.total_nodes == 1
 
-            assert merged.metadata.total_nodes == 1
-        finally:
-            temp_path.unlink()
-
-    def test_add_files(self):
+    def test_add_files(self, tmp_path):
         """Test adding multiple graph files."""
         graph1 = LineageGraph(
             metadata=GraphMetadata(source_files=["/path/q1.sql"]),
@@ -185,20 +177,18 @@ class TestGraphMergerFileOperations:
             nodes=[GraphNode.from_identifier("t2.col", "/path/q2.sql", 0)],
         )
 
-        with TemporaryDirectory() as tmpdir:
-            tmpdir_path = Path(tmpdir)
-            path1 = tmpdir_path / "graph1.json"
-            path2 = tmpdir_path / "graph2.json"
+        path1 = tmp_path / "graph1.json"
+        path2 = tmp_path / "graph2.json"
 
-            save_graph(graph1, path1)
-            save_graph(graph2, path2)
+        save_graph(graph1, path1)
+        save_graph(graph2, path2)
 
-            merger = GraphMerger()
-            merger.add_files([path1, path2])
-            merged = merger.merge()
+        merger = GraphMerger()
+        merger.add_files([path1, path2])
+        merged = merger.merge()
 
-            assert merged.metadata.total_nodes == 2
-            assert len(merged.metadata.source_files) == 2
+        assert merged.metadata.total_nodes == 2
+        assert len(merged.metadata.source_files) == 2
 
     def test_add_nonexistent_file(self):
         """Test error when adding non-existent file."""
@@ -210,29 +200,22 @@ class TestGraphMergerFileOperations:
 class TestGraphMergerMethodChaining:
     """Tests for method chaining support."""
 
-    def test_method_chaining(self):
+    def test_method_chaining(self, tmp_path):
         """Test that all add methods return self."""
         graph = LineageGraph()
 
-        with NamedTemporaryFile(
-            mode="w", suffix=".json", delete=False, encoding="utf-8"
-        ) as f:
-            temp_path = Path(f.name)
+        graph_file = tmp_path / "graph.json"
+        save_graph(graph, graph_file)
 
-        try:
-            save_graph(graph, temp_path)
+        result = GraphMerger().add_graph(graph).add_file(graph_file).merge()
 
-            result = GraphMerger().add_graph(graph).add_file(temp_path).merge()
-
-            assert result is not None
-        finally:
-            temp_path.unlink()
+        assert result is not None
 
 
 class TestMergeGraphsFunction:
     """Tests for the convenience merge_graphs function."""
 
-    def test_merge_graphs_convenience_function(self):
+    def test_merge_graphs_convenience_function(self, tmp_path):
         """Test merge_graphs convenience function."""
         graph1 = LineageGraph(
             metadata=GraphMetadata(source_files=["/path/q1.sql"]),
@@ -243,17 +226,15 @@ class TestMergeGraphsFunction:
             nodes=[GraphNode.from_identifier("t2.col", "/path/q2.sql", 0)],
         )
 
-        with TemporaryDirectory() as tmpdir:
-            tmpdir_path = Path(tmpdir)
-            path1 = tmpdir_path / "graph1.json"
-            path2 = tmpdir_path / "graph2.json"
+        path1 = tmp_path / "graph1.json"
+        path2 = tmp_path / "graph2.json"
 
-            save_graph(graph1, path1)
-            save_graph(graph2, path2)
+        save_graph(graph1, path1)
+        save_graph(graph2, path2)
 
-            merged = merge_graphs([path1, path2])
+        merged = merge_graphs([path1, path2])
 
-            assert merged.metadata.total_nodes == 2
+        assert merged.metadata.total_nodes == 2
 
 
 class TestGraphMergerSourceFiles:

@@ -1,7 +1,6 @@
 """Tests for graph Pydantic models."""
 
 from pathlib import Path
-from tempfile import NamedTemporaryFile
 
 import pytest
 
@@ -115,68 +114,47 @@ class TestGraphEdge:
 class TestManifest:
     """Tests for Manifest model."""
 
-    def test_from_csv_basic(self):
+    def test_from_csv_basic(self, tmp_path):
         """Test loading manifest from CSV."""
-        with NamedTemporaryFile(
-            mode="w", suffix=".csv", delete=False, encoding="utf-8"
-        ) as f:
-            f.write("file_path,dialect\n")
-            f.write("query1.sql,spark\n")
-            f.write("query2.sql,postgres\n")
-            f.write("query3.sql,\n")
-            temp_path = Path(f.name)
+        csv_file = tmp_path / "manifest.csv"
+        csv_file.write_text(
+            "file_path,dialect\nquery1.sql,spark\nquery2.sql,postgres\nquery3.sql,\n"
+        )
 
-        try:
-            manifest = Manifest.from_csv(temp_path)
-            assert len(manifest.entries) == 3
-            assert manifest.entries[0].file_path == "query1.sql"
-            assert manifest.entries[0].dialect == "spark"
-            assert manifest.entries[1].file_path == "query2.sql"
-            assert manifest.entries[1].dialect == "postgres"
-            assert manifest.entries[2].file_path == "query3.sql"
-            assert manifest.entries[2].dialect is None
-        finally:
-            temp_path.unlink()
+        manifest = Manifest.from_csv(csv_file)
+        assert len(manifest.entries) == 3
+        assert manifest.entries[0].file_path == "query1.sql"
+        assert manifest.entries[0].dialect == "spark"
+        assert manifest.entries[1].file_path == "query2.sql"
+        assert manifest.entries[1].dialect == "postgres"
+        assert manifest.entries[2].file_path == "query3.sql"
+        assert manifest.entries[2].dialect is None
 
     def test_from_csv_missing_file(self):
         """Test loading manifest from non-existent file."""
         with pytest.raises(FileNotFoundError):
             Manifest.from_csv(Path("/nonexistent/manifest.csv"))
 
-    def test_from_csv_missing_column(self):
+    def test_from_csv_missing_column(self, tmp_path):
         """Test loading manifest without file_path column."""
-        with NamedTemporaryFile(
-            mode="w", suffix=".csv", delete=False, encoding="utf-8"
-        ) as f:
-            f.write("name,dialect\n")
-            f.write("query1.sql,spark\n")
-            temp_path = Path(f.name)
+        csv_file = tmp_path / "manifest.csv"
+        csv_file.write_text("name,dialect\nquery1.sql,spark\n")
 
-        try:
-            with pytest.raises(ValueError) as exc_info:
-                Manifest.from_csv(temp_path)
-            assert "file_path" in str(exc_info.value)
-        finally:
-            temp_path.unlink()
+        with pytest.raises(ValueError) as exc_info:
+            Manifest.from_csv(csv_file)
+        assert "file_path" in str(exc_info.value)
 
-    def test_from_csv_skips_empty_rows(self):
+    def test_from_csv_skips_empty_rows(self, tmp_path):
         """Test that empty file_path rows are skipped."""
-        with NamedTemporaryFile(
-            mode="w", suffix=".csv", delete=False, encoding="utf-8"
-        ) as f:
-            f.write("file_path,dialect\n")
-            f.write("query1.sql,spark\n")
-            f.write(",postgres\n")
-            f.write("query2.sql,\n")
-            temp_path = Path(f.name)
+        csv_file = tmp_path / "manifest.csv"
+        csv_file.write_text(
+            "file_path,dialect\nquery1.sql,spark\n,postgres\nquery2.sql,\n"
+        )
 
-        try:
-            manifest = Manifest.from_csv(temp_path)
-            assert len(manifest.entries) == 2
-            assert manifest.entries[0].file_path == "query1.sql"
-            assert manifest.entries[1].file_path == "query2.sql"
-        finally:
-            temp_path.unlink()
+        manifest = Manifest.from_csv(csv_file)
+        assert len(manifest.entries) == 2
+        assert manifest.entries[0].file_path == "query1.sql"
+        assert manifest.entries[1].file_path == "query2.sql"
 
 
 class TestManifestEntry:

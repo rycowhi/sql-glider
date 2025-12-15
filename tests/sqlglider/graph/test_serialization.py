@@ -1,7 +1,6 @@
 """Tests for graph serialization."""
 
 from pathlib import Path
-from tempfile import NamedTemporaryFile, TemporaryDirectory
 
 import pytest
 import rustworkx as rx
@@ -24,7 +23,7 @@ from sqlglider.graph.serialization import (
 class TestSaveAndLoadGraph:
     """Tests for save_graph and load_graph functions."""
 
-    def test_save_and_load_roundtrip(self):
+    def test_save_and_load_roundtrip(self, tmp_path):
         """Test saving and loading graph preserves data."""
         nodes = [
             GraphNode.from_identifier("orders.id", "/path/query.sql", 0),
@@ -50,39 +49,30 @@ class TestSaveAndLoadGraph:
             edges=edges,
         )
 
-        with NamedTemporaryFile(
-            mode="w", suffix=".json", delete=False, encoding="utf-8"
-        ) as f:
-            temp_path = Path(f.name)
+        graph_file = tmp_path / "graph.json"
+        save_graph(original, graph_file)
+        loaded = load_graph(graph_file)
 
-        try:
-            save_graph(original, temp_path)
-            loaded = load_graph(temp_path)
-
-            assert loaded.metadata.node_format == original.metadata.node_format
-            assert loaded.metadata.default_dialect == original.metadata.default_dialect
-            assert len(loaded.nodes) == len(original.nodes)
-            assert len(loaded.edges) == len(original.edges)
-            assert loaded.nodes[0].identifier == original.nodes[0].identifier
-            assert loaded.edges[0].source_node == original.edges[0].source_node
-        finally:
-            temp_path.unlink()
+        assert loaded.metadata.node_format == original.metadata.node_format
+        assert loaded.metadata.default_dialect == original.metadata.default_dialect
+        assert len(loaded.nodes) == len(original.nodes)
+        assert len(loaded.edges) == len(original.edges)
+        assert loaded.nodes[0].identifier == original.nodes[0].identifier
+        assert loaded.edges[0].source_node == original.edges[0].source_node
 
     def test_load_nonexistent_file(self):
         """Test loading from non-existent file raises error."""
         with pytest.raises(FileNotFoundError):
             load_graph(Path("/nonexistent/graph.json"))
 
-    def test_save_creates_file(self):
+    def test_save_creates_file(self, tmp_path):
         """Test save_graph creates the output file."""
         graph = LineageGraph()
 
-        with TemporaryDirectory() as tmpdir:
-            temp_path = Path(tmpdir) / "new_graph.json"
-
-            assert not temp_path.exists()
-            save_graph(graph, temp_path)
-            assert temp_path.exists()
+        graph_file = tmp_path / "new_graph.json"
+        assert not graph_file.exists()
+        save_graph(graph, graph_file)
+        assert graph_file.exists()
 
 
 class TestRustworkxConversion:

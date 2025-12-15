@@ -1,7 +1,7 @@
 """Tests for CLI commands."""
 
 from pathlib import Path
-from tempfile import NamedTemporaryFile, TemporaryDirectory
+from tempfile import TemporaryDirectory
 
 import pytest
 from typer.testing import CliRunner
@@ -15,7 +15,7 @@ class TestLineageCommand:
     """Tests for the lineage command."""
 
     @pytest.fixture
-    def sample_sql_file(self):
+    def sample_sql_file(self, tmp_path):
         """Create a temporary SQL file for testing."""
         sql_content = """
         SELECT
@@ -25,31 +25,16 @@ class TestLineageCommand:
         FROM customers c
         JOIN orders o ON c.id = o.customer_id;
         """
-        with NamedTemporaryFile(
-            mode="w", delete=False, suffix=".sql", encoding="utf-8"
-        ) as f:
-            f.write(sql_content)
-            temp_path = Path(f.name)
-
-        yield temp_path
-
-        # Cleanup
-        temp_path.unlink()
+        sql_file = tmp_path / "sample.sql"
+        sql_file.write_text(sql_content)
+        return sql_file
 
     @pytest.fixture
-    def invalid_sql_file(self):
+    def invalid_sql_file(self, tmp_path):
         """Create a temporary file with invalid SQL."""
-        sql_content = "INVALID SQL SYNTAX HERE ;;;;"
-        with NamedTemporaryFile(
-            mode="w", delete=False, suffix=".sql", encoding="utf-8"
-        ) as f:
-            f.write(sql_content)
-            temp_path = Path(f.name)
-
-        yield temp_path
-
-        # Cleanup
-        temp_path.unlink()
+        sql_file = tmp_path / "invalid.sql"
+        sql_file.write_text("INVALID SQL SYNTAX HERE ;;;;")
+        return sql_file
 
     def test_lineage_basic(self, sample_sql_file):
         """Test basic lineage analysis."""
@@ -122,32 +107,29 @@ class TestLineageCommand:
         # Should mention tables
         assert "customers" in result.stdout or "orders" in result.stdout
 
-    def test_lineage_with_output_file(self, sample_sql_file):
+    def test_lineage_with_output_file(self, sample_sql_file, tmp_path):
         """Test writing output to file."""
-        with NamedTemporaryFile(delete=False, suffix=".txt") as f:
-            output_file = Path(f.name)
+        output_file = tmp_path / "output.txt"
 
-        try:
-            result = runner.invoke(
-                app,
-                [
-                    "lineage",
-                    str(sample_sql_file),
-                    "--output-file",
-                    str(output_file),
-                ],
-            )
+        result = runner.invoke(
+            app,
+            [
+                "lineage",
+                str(sample_sql_file),
+                "--output-file",
+                str(output_file),
+            ],
+        )
 
-            assert result.exit_code == 0
-            assert output_file.exists()
-            assert "Success" in result.stdout
-            assert str(output_file) in result.stdout
+        assert result.exit_code == 0
+        assert output_file.exists()
+        assert "Success" in result.stdout
+        # Check filename appears (may be wrapped across lines in output)
+        assert output_file.name in result.stdout
 
-            # Verify content was written
-            content = output_file.read_text(encoding="utf-8")
-            assert len(content) > 0
-        finally:
-            output_file.unlink()
+        # Verify content was written
+        content = output_file.read_text(encoding="utf-8")
+        assert len(content) > 0
 
     def test_lineage_with_dialect(self, sample_sql_file):
         """Test specifying SQL dialect."""
@@ -222,60 +204,52 @@ class TestLineageCommand:
         # Verify JSON format
         assert "{" in result.stdout
 
-    def test_lineage_json_output_to_file(self, sample_sql_file):
+    def test_lineage_json_output_to_file(self, sample_sql_file, tmp_path):
         """Test JSON output written to file."""
-        with NamedTemporaryFile(delete=False, suffix=".json") as f:
-            output_file = Path(f.name)
+        output_file = tmp_path / "output.json"
 
-        try:
-            result = runner.invoke(
-                app,
-                [
-                    "lineage",
-                    str(sample_sql_file),
-                    "--output-format",
-                    "json",
-                    "--output-file",
-                    str(output_file),
-                ],
-            )
+        result = runner.invoke(
+            app,
+            [
+                "lineage",
+                str(sample_sql_file),
+                "--output-format",
+                "json",
+                "--output-file",
+                str(output_file),
+            ],
+        )
 
-            assert result.exit_code == 0
+        assert result.exit_code == 0
 
-            # Verify JSON is valid
-            import json
+        # Verify JSON is valid
+        import json
 
-            content = output_file.read_text(encoding="utf-8")
-            parsed = json.loads(content)
-            assert "queries" in parsed
-        finally:
-            output_file.unlink()
+        content = output_file.read_text(encoding="utf-8")
+        parsed = json.loads(content)
+        assert "queries" in parsed
 
-    def test_lineage_csv_output_to_file(self, sample_sql_file):
+    def test_lineage_csv_output_to_file(self, sample_sql_file, tmp_path):
         """Test CSV output written to file."""
-        with NamedTemporaryFile(delete=False, suffix=".csv") as f:
-            output_file = Path(f.name)
+        output_file = tmp_path / "output.csv"
 
-        try:
-            result = runner.invoke(
-                app,
-                [
-                    "lineage",
-                    str(sample_sql_file),
-                    "--output-format",
-                    "csv",
-                    "--output-file",
-                    str(output_file),
-                ],
-            )
+        result = runner.invoke(
+            app,
+            [
+                "lineage",
+                str(sample_sql_file),
+                "--output-format",
+                "csv",
+                "--output-file",
+                str(output_file),
+            ],
+        )
 
-            assert result.exit_code == 0
+        assert result.exit_code == 0
 
-            # Verify CSV format
-            content = output_file.read_text(encoding="utf-8")
-            assert "query_index,output_column,source_column" in content
-        finally:
-            output_file.unlink()
+        # Verify CSV format
+        content = output_file.read_text(encoding="utf-8")
+        assert "query_index,output_column,source_column" in content
 
     def test_lineage_table_level_json(self, sample_sql_file):
         """Test table-level lineage with JSON output."""
@@ -317,7 +291,7 @@ class TestConfigIntegration:
     """Tests for configuration file integration with CLI."""
 
     @pytest.fixture
-    def sample_sql_file(self):
+    def sample_sql_file(self, tmp_path):
         """Create a temporary SQL file for testing."""
         sql_content = """
         SELECT
@@ -327,16 +301,9 @@ class TestConfigIntegration:
         FROM customers c
         JOIN orders o ON c.id = o.customer_id;
         """
-        with NamedTemporaryFile(
-            mode="w", delete=False, suffix=".sql", encoding="utf-8"
-        ) as f:
-            f.write(sql_content)
-            temp_path = Path(f.name)
-
-        yield temp_path
-
-        # Cleanup
-        temp_path.unlink()
+        sql_file = tmp_path / "sample.sql"
+        sql_file.write_text(sql_content)
+        return sql_file
 
     def test_cli_uses_config_defaults(self, sample_sql_file):
         """Test that CLI uses config defaults when no args provided."""
@@ -567,7 +534,7 @@ class TestGraphBuildCommand:
     """Tests for the graph build command."""
 
     @pytest.fixture
-    def sample_sql_file(self):
+    def sample_sql_file(self, tmp_path):
         """Create a temporary SQL file for testing."""
         sql_content = """
         SELECT
@@ -575,40 +542,30 @@ class TestGraphBuildCommand:
             c.customer_name
         FROM customers c;
         """
-        with NamedTemporaryFile(
-            mode="w", delete=False, suffix=".sql", encoding="utf-8"
-        ) as f:
-            f.write(sql_content)
-            temp_path = Path(f.name)
+        sql_file = tmp_path / "sample.sql"
+        sql_file.write_text(sql_content)
+        return sql_file
 
-        yield temp_path
-        temp_path.unlink()
-
-    def test_graph_build_single_file(self, sample_sql_file):
+    def test_graph_build_single_file(self, sample_sql_file, tmp_path):
         """Test building graph from single file."""
-        with NamedTemporaryFile(delete=False, suffix=".json") as f:
-            output_path = Path(f.name)
+        output_path = tmp_path / "graph.json"
 
-        try:
-            result = runner.invoke(
-                app,
-                ["graph", "build", str(sample_sql_file), "-o", str(output_path)],
-            )
+        result = runner.invoke(
+            app,
+            ["graph", "build", str(sample_sql_file), "-o", str(output_path)],
+        )
 
-            assert result.exit_code == 0
-            assert "Success" in result.stdout
-            assert output_path.exists()
+        assert result.exit_code == 0
+        assert "Success" in result.stdout
+        assert output_path.exists()
 
-            # Verify JSON content
-            import json
+        # Verify JSON content
+        import json
 
-            content = json.loads(output_path.read_text())
-            assert "metadata" in content
-            assert "nodes" in content
-            assert "edges" in content
-        finally:
-            if output_path.exists():
-                output_path.unlink()
+        content = json.loads(output_path.read_text())
+        assert "metadata" in content
+        assert "nodes" in content
+        assert "edges" in content
 
     def test_graph_build_directory(self):
         """Test building graph from directory."""
@@ -652,34 +609,29 @@ class TestGraphBuildCommand:
             assert result.exit_code == 0
             assert "2 nodes" in result.stdout or result.exit_code == 0
 
-    def test_graph_build_with_dialect(self, sample_sql_file):
+    def test_graph_build_with_dialect(self, sample_sql_file, tmp_path):
         """Test building graph with specific dialect."""
-        with NamedTemporaryFile(delete=False, suffix=".json") as f:
-            output_path = Path(f.name)
+        output_path = tmp_path / "graph.json"
 
-        try:
-            result = runner.invoke(
-                app,
-                [
-                    "graph",
-                    "build",
-                    str(sample_sql_file),
-                    "-o",
-                    str(output_path),
-                    "--dialect",
-                    "postgres",
-                ],
-            )
+        result = runner.invoke(
+            app,
+            [
+                "graph",
+                "build",
+                str(sample_sql_file),
+                "-o",
+                str(output_path),
+                "--dialect",
+                "postgres",
+            ],
+        )
 
-            assert result.exit_code == 0
+        assert result.exit_code == 0
 
-            import json
+        import json
 
-            content = json.loads(output_path.read_text())
-            assert content["metadata"]["default_dialect"] == "postgres"
-        finally:
-            if output_path.exists():
-                output_path.unlink()
+        content = json.loads(output_path.read_text())
+        assert content["metadata"]["default_dialect"] == "postgres"
 
     def test_graph_build_with_manifest(self):
         """Test building graph from manifest file."""
@@ -1180,7 +1132,7 @@ class TestTablesCommand:
     """Tests for the tables overview command."""
 
     @pytest.fixture
-    def sample_sql_file(self):
+    def sample_sql_file(self, tmp_path):
         """Create a temporary SQL file for testing."""
         sql_content = """
         SELECT
@@ -1190,17 +1142,12 @@ class TestTablesCommand:
         FROM customers c
         JOIN orders o ON c.id = o.customer_id;
         """
-        with NamedTemporaryFile(
-            mode="w", delete=False, suffix=".sql", encoding="utf-8"
-        ) as f:
-            f.write(sql_content)
-            temp_path = Path(f.name)
-
-        yield temp_path
-        temp_path.unlink()
+        sql_file = tmp_path / "sample.sql"
+        sql_file.write_text(sql_content)
+        return sql_file
 
     @pytest.fixture
-    def create_view_sql_file(self):
+    def create_view_sql_file(self, tmp_path):
         """Create a temporary SQL file with CREATE VIEW."""
         sql_content = """
         CREATE VIEW customer_summary AS
@@ -1210,34 +1157,24 @@ class TestTablesCommand:
         FROM orders
         GROUP BY customer_id;
         """
-        with NamedTemporaryFile(
-            mode="w", delete=False, suffix=".sql", encoding="utf-8"
-        ) as f:
-            f.write(sql_content)
-            temp_path = Path(f.name)
-
-        yield temp_path
-        temp_path.unlink()
+        sql_file = tmp_path / "create_view.sql"
+        sql_file.write_text(sql_content)
+        return sql_file
 
     @pytest.fixture
-    def multi_query_sql_file(self):
+    def multi_query_sql_file(self, tmp_path):
         """Create a temporary SQL file with multiple queries."""
         sql_content = """
         SELECT * FROM customers;
         INSERT INTO target_table SELECT * FROM source_table;
         CREATE VIEW summary AS SELECT * FROM orders;
         """
-        with NamedTemporaryFile(
-            mode="w", delete=False, suffix=".sql", encoding="utf-8"
-        ) as f:
-            f.write(sql_content)
-            temp_path = Path(f.name)
-
-        yield temp_path
-        temp_path.unlink()
+        sql_file = tmp_path / "multi_query.sql"
+        sql_file.write_text(sql_content)
+        return sql_file
 
     @pytest.fixture
-    def cte_sql_file(self):
+    def cte_sql_file(self, tmp_path):
         """Create a temporary SQL file with CTEs."""
         sql_content = """
         WITH order_totals AS (
@@ -1249,14 +1186,9 @@ class TestTablesCommand:
         FROM customers c
         JOIN order_totals ot ON c.id = ot.customer_id;
         """
-        with NamedTemporaryFile(
-            mode="w", delete=False, suffix=".sql", encoding="utf-8"
-        ) as f:
-            f.write(sql_content)
-            temp_path = Path(f.name)
-
-        yield temp_path
-        temp_path.unlink()
+        sql_file = tmp_path / "cte.sql"
+        sql_file.write_text(sql_content)
+        return sql_file
 
     def test_tables_basic(self, sample_sql_file):
         """Test basic tables overview analysis."""
@@ -1296,35 +1228,31 @@ class TestTablesCommand:
         assert "customers" in result.stdout
         assert "orders" in result.stdout
 
-    def test_tables_with_output_file(self, sample_sql_file):
+    def test_tables_with_output_file(self, sample_sql_file, tmp_path):
         """Test writing output to file."""
-        with NamedTemporaryFile(delete=False, suffix=".json") as f:
-            output_file = Path(f.name)
+        output_file = tmp_path / "output.json"
 
-        try:
-            result = runner.invoke(
-                app,
-                [
-                    "tables",
-                    "overview",
-                    str(sample_sql_file),
-                    "--output-format",
-                    "json",
-                    "--output-file",
-                    str(output_file),
-                ],
-            )
+        result = runner.invoke(
+            app,
+            [
+                "tables",
+                "overview",
+                str(sample_sql_file),
+                "--output-format",
+                "json",
+                "--output-file",
+                str(output_file),
+            ],
+        )
 
-            assert result.exit_code == 0
-            assert output_file.exists()
-            assert "Success" in result.stdout
+        assert result.exit_code == 0
+        assert output_file.exists()
+        assert "Success" in result.stdout
 
-            import json
+        import json
 
-            content = json.loads(output_file.read_text())
-            assert "queries" in content
-        finally:
-            output_file.unlink()
+        content = json.loads(output_file.read_text())
+        assert "queries" in content
 
     def test_tables_with_dialect(self, sample_sql_file):
         """Test specifying SQL dialect."""
@@ -1588,29 +1516,23 @@ class TestStdinSupport:
         assert result.exit_code == 0
         assert "prod.orders" in result.stdout
 
-    def test_lineage_file_takes_precedence_over_stdin(self):
+    def test_lineage_file_takes_precedence_over_stdin(self, tmp_path):
         """Test that file argument takes precedence over stdin."""
         stdin_content = "SELECT wrong_column FROM wrong_table"
         file_content = "SELECT correct_column FROM correct_table"
 
-        with NamedTemporaryFile(
-            mode="w", delete=False, suffix=".sql", encoding="utf-8"
-        ) as f:
-            f.write(file_content)
-            temp_path = Path(f.name)
+        sql_file = tmp_path / "query.sql"
+        sql_file.write_text(file_content)
 
-        try:
-            result = runner.invoke(
-                app,
-                ["lineage", str(temp_path), "--output-format", "json"],
-                input=stdin_content,
-            )
+        result = runner.invoke(
+            app,
+            ["lineage", str(sql_file), "--output-format", "json"],
+            input=stdin_content,
+        )
 
-            assert result.exit_code == 0
-            # Should use file content, not stdin
-            assert "correct_column" in result.stdout or "correct_table" in result.stdout
-        finally:
-            temp_path.unlink()
+        assert result.exit_code == 0
+        # Should use file content, not stdin
+        assert "correct_column" in result.stdout or "correct_table" in result.stdout
 
     def test_stdin_with_multi_query(self):
         """Test stdin with multiple SQL statements."""

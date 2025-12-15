@@ -3,8 +3,6 @@
 import csv
 import json
 from io import StringIO
-from pathlib import Path
-from tempfile import NamedTemporaryFile
 
 from rich.console import Console
 
@@ -398,18 +396,13 @@ class TestCsvFormatter:
 class TestOutputWriter:
     """Tests for OutputWriter."""
 
-    def test_write_to_file(self):
+    def test_write_to_file(self, tmp_path):
         """Test writing output to a file."""
         content = "test output"
+        output_file = tmp_path / "output.txt"
 
-        with NamedTemporaryFile(mode="w", delete=False, suffix=".txt") as f:
-            temp_path = Path(f.name)
-
-        try:
-            OutputWriter.write(content, temp_path)
-            assert temp_path.read_text(encoding="utf-8") == content
-        finally:
-            temp_path.unlink()
+        OutputWriter.write(content, output_file)
+        assert output_file.read_text(encoding="utf-8") == content
 
     def test_write_to_stdout(self, capsys):
         """Test writing output to stdout."""

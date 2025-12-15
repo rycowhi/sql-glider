@@ -162,7 +162,9 @@ class DatabricksCatalog(Catalog):
             try:
                 self._client = WorkspaceClient(**kwargs)
             except Exception as e:
-                raise CatalogError(f"Failed to authenticate with Databricks: {e}") from e
+                raise CatalogError(
+                    f"Failed to authenticate with Databricks: {e}"
+                ) from e
 
         return self._client
 

@@ -1,7 +1,6 @@
 """Tests for GraphQuerier class."""
 
 from pathlib import Path
-from tempfile import NamedTemporaryFile
 
 import pytest
 
@@ -63,23 +62,16 @@ class TestLineageQueryResult:
 class TestGraphQuerierBasic:
     """Basic tests for GraphQuerier."""
 
-    def test_from_file(self):
+    def test_from_file(self, tmp_path):
         """Test creating querier from file."""
         graph = LineageGraph(
             nodes=[GraphNode.from_identifier("table.col", "/path/q.sql", 0)],
         )
 
-        with NamedTemporaryFile(
-            mode="w", suffix=".json", delete=False, encoding="utf-8"
-        ) as f:
-            temp_path = Path(f.name)
-
-        try:
-            save_graph(graph, temp_path)
-            querier = GraphQuerier.from_file(temp_path)
-            assert querier is not None
-        finally:
-            temp_path.unlink()
+        graph_file = tmp_path / "graph.json"
+        save_graph(graph, graph_file)
+        querier = GraphQuerier.from_file(graph_file)
+        assert querier is not None
 
     def test_from_file_not_found(self):
         """Test error when file not found."""
