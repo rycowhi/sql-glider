@@ -45,6 +45,26 @@
 # environment = "production"
 
 # ============================================================================
+# Catalog Configuration (for `tables pull` command)
+# ============================================================================
+
+# Catalog provider for pulling DDL from remote catalogs
+# Options: "databricks", or custom registered catalogs
+# Required for `sqlglider tables pull` command
+# catalog_type = "databricks"
+
+# Output folder for DDL files
+# If not set, DDL is printed to stdout
+# ddl_folder = "./ddl"
+
+# Databricks-specific configuration
+# Environment variables can also be used: DATABRICKS_HOST, DATABRICKS_TOKEN, DATABRICKS_WAREHOUSE_ID
+# [sqlglider.catalog.databricks]
+# host = "https://your-workspace.cloud.databricks.com"
+# token = "dapi..."  # Or use DATABRICKS_TOKEN env var (recommended)
+# warehouse_id = "abc123..."  # Required - SQL warehouse for executing queries
+
+# ============================================================================
 # Example Configurations
 # ============================================================================
 
@@ -91,3 +111,7 @@
 # Templating:
 #   uv run sqlglider template query.sql --var schema=analytics --var table=users
 #   uv run sqlglider lineage query.sql --templater jinja --var schema=prod
+#
+# Catalog (pull DDL from remote):
+#   uv run sqlglider tables pull query.sql --catalog-type databricks
+#   uv run sqlglider tables pull query.sql --catalog-type databricks --ddl-folder ./ddl/

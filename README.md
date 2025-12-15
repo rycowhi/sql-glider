@@ -151,6 +151,23 @@ uv run sqlglider tables overview query.sql --output-format json
 uv run sqlglider tables overview query.sql --output-format csv --output-file tables.csv
 ```
 
+### Pull DDL from Remote Catalogs
+
+Fetch DDL definitions from remote data catalogs (e.g., Databricks Unity Catalog):
+
+```bash
+# Pull DDL for all tables used in a SQL file (outputs to stdout)
+uv run sqlglider tables pull query.sql --catalog-type databricks
+
+# Save DDL files to a folder (one file per table)
+uv run sqlglider tables pull query.sql -c databricks -o ./ddl/
+
+# List available catalog providers
+uv run sqlglider tables pull --list
+```
+
+**Note:** Requires optional dependencies. Install with: `pip install sql-glider[databricks]`
+
 **Example Output (JSON):**
 ```json
 {
@@ -548,6 +565,37 @@ Options:
   --var, -v                   Template variable in key=value format (repeatable) [optional]
   --vars-file                 Path to variables file (JSON or YAML) [optional]
   --help                      Show help message and exit
+```
+
+```
+sqlglider tables pull <sql_file> [OPTIONS]
+
+Arguments:
+  sql_file                    Path to SQL file to analyze [optional, reads from stdin if omitted]
+
+Options:
+  --catalog-type, -c          Catalog provider (e.g., 'databricks') [required if not in config]
+  --ddl-folder, -o            Output folder for DDL files [optional, outputs to stdout if omitted]
+  --dialect, -d               SQL dialect (spark, postgres, snowflake, etc.) [default: spark]
+  --templater, -t             Templater for SQL preprocessing (e.g., 'jinja', 'none') [optional]
+  --var, -v                   Template variable in key=value format (repeatable) [optional]
+  --vars-file                 Path to variables file (JSON or YAML) [optional]
+  --list, -l                  List available catalog providers and exit
+  --help                      Show help message and exit
+```
+
+**Databricks Setup:**
+
+Install the optional Databricks dependency:
+```bash
+pip install sql-glider[databricks]
+```
+
+Configure authentication (via environment variables or `sqlglider.toml`):
+```bash
+export DATABRICKS_HOST="https://your-workspace.cloud.databricks.com"
+export DATABRICKS_TOKEN="dapi..."
+export DATABRICKS_WAREHOUSE_ID="abc123..."
 ```
 
 ### Dissect Command

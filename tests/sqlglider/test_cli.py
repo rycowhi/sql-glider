@@ -1337,7 +1337,14 @@ class TestTablesCommand:
     def test_tables_create_view(self, create_view_sql_file):
         """Test tables overview command with CREATE VIEW."""
         result = runner.invoke(
-            app, ["tables", "overview", str(create_view_sql_file), "--output-format", "json"]
+            app,
+            [
+                "tables",
+                "overview",
+                str(create_view_sql_file),
+                "--output-format",
+                "json",
+            ],
         )
 
         assert result.exit_code == 0
@@ -1358,7 +1365,14 @@ class TestTablesCommand:
     def test_tables_multi_query(self, multi_query_sql_file):
         """Test tables overview with multi-query file."""
         result = runner.invoke(
-            app, ["tables", "overview", str(multi_query_sql_file), "--output-format", "json"]
+            app,
+            [
+                "tables",
+                "overview",
+                str(multi_query_sql_file),
+                "--output-format",
+                "json",
+            ],
         )
 
         assert result.exit_code == 0
@@ -1423,7 +1437,9 @@ class TestTablesCommand:
 
     def test_tables_file_not_found(self):
         """Test error handling for non-existent file."""
-        result = runner.invoke(app, ["tables", "overview", "/path/that/does/not/exist.sql"])
+        result = runner.invoke(
+            app, ["tables", "overview", "/path/that/does/not/exist.sql"]
+        )
 
         assert result.exit_code in [1, 2]
 

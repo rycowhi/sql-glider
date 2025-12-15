@@ -33,6 +33,9 @@ dependencies = [
     "jinja2>=3.0.0",
 ]
 
+[project.optional-dependencies]
+databricks = ["databricks-sdk>=0.20.0"]
+
 [project.urls]
 Homepage = "https://github.com/rycowhi/sql-glider/"
 Repository = "https://github.com/rycowhi/sql-glider/"
@@ -45,6 +48,9 @@ sqlglider = "sqlglider.cli:app"
 [project.entry-points."sqlglider.templaters"]
 jinja = "sqlglider.templating.jinja:JinjaTemplater"
 none = "sqlglider.templating.base:NoOpTemplater"
+
+[project.entry-points."sqlglider.catalogs"]
+databricks = "sqlglider.catalog.databricks:DatabricksCatalog"
 
 [tool.hatch.version]
 source = "vcs"
@@ -61,8 +67,10 @@ package = true
 [dependency-groups]
 dev = [
     "basedpyright>=1.36.0",
+    "databricks-sdk>=0.20.0",  # For testing catalog integration
     "pytest>=9.0.1",
     "pytest-cov>=7.0.0",
+    "pytest-mock>=3.15.1",
     "ruff>=0.14.8",
 ]
 

@@ -28,6 +28,17 @@ sql-glider/
 │       │   ├── __init__.py          # Lineage module exports
 │       │   ├── analyzer.py          # Core lineage analysis logic
 │       │   └── formatters.py        # Output formatters (text, JSON, CSV)
+│       ├── catalog/
+│       │   ├── __init__.py          # Catalog module exports
+│       │   ├── base.py              # Abstract Catalog class + CatalogError
+│       │   ├── registry.py          # Plugin discovery via entry points
+│       │   └── databricks.py        # Databricks Unity Catalog implementation
+│       ├── templating/
+│       │   ├── __init__.py          # Templating module exports
+│       │   ├── base.py              # Abstract Templater class + TemplaterError
+│       │   ├── registry.py          # Plugin discovery for templaters
+│       │   ├── jinja.py             # Jinja2 templater implementation
+│       │   └── variables.py         # Variable loading from multiple sources
 │       └── utils/
 │           ├── __init__.py          # Utils module exports
 │           ├── config.py            # Configuration file loading
@@ -579,6 +590,11 @@ class ConfigSettings(BaseModel):
     dialect: Optional[str] = None
     level: Optional[str] = None
     output_format: Optional[str] = None
+    templater: Optional[str] = None
+    templating: Optional[TemplatingConfig] = None
+    catalog_type: Optional[str] = None
+    ddl_folder: Optional[str] = None
+    catalog: Optional[CatalogConfig] = None
 ```
 
 **Key Functions:**
@@ -606,6 +622,11 @@ def load_config(config_path: Optional[Path] = None) -> ConfigSettings
 dialect = "postgres"
 level = "column"
 output_format = "json"
+catalog_type = "databricks"
+ddl_folder = "./ddl"
+
+[sqlglider.catalog.databricks]
+warehouse_id = "abc123..."
 ```
 
 **Design Notes:**
@@ -613,6 +634,65 @@ output_format = "json"
 - Config is project-specific (PWD only, no user-level config)
 - Fail-safe: Never crashes on config errors
 - Forward compatible: Ignores unknown settings for future features
+
+### 8. Catalog Module (`catalog/`)
+
+**Purpose:** Plugin system for fetching DDL from remote data catalogs
+
+The catalog module provides an extensible architecture for connecting to various data catalogs (e.g., Databricks Unity Catalog) and fetching table DDL definitions.
+
+**Plugin Architecture:**
+
+```python
+# Abstract base class
+class Catalog(ABC):
+    @property
+    @abstractmethod
+    def name(self) -> str: ...
+
+    @abstractmethod
+    def get_ddl(self, table_name: str) -> str: ...
+
+    @abstractmethod
+    def get_ddl_batch(self, table_names: List[str]) -> Dict[str, str]: ...
+
+    def configure(self, config: Optional[Dict[str, Any]] = None) -> None: ...
+```
+
+**Registry Pattern:**
+
+- Catalogs are discovered via Python entry points (`sqlglider.catalogs`)
+- Lazy loading with graceful handling of missing optional dependencies
+- Factory function `get_catalog(name)` returns configured instances
+
+**Built-in Catalogs:**
+
+- **databricks**: Databricks Unity Catalog via `databricks-sdk`
+  - Uses `SHOW CREATE TABLE` via statement execution API
+  - Requires warehouse ID for SQL execution
+  - Authentication via env vars or config
+
+**CLI Integration:**
+
+```bash
+# Pull DDL for tables in a SQL file
+sqlglider tables pull query.sql --catalog-type databricks
+
+# Output to folder (one file per table)
+sqlglider tables pull query.sql -c databricks -o ./ddl/
+
+# List available catalog providers
+sqlglider tables pull --list
+```
+
+**Adding Custom Catalogs:**
+
+1. Create a class inheriting from `Catalog`
+2. Register via entry point in `pyproject.toml`:
+   ```toml
+   [project.entry-points."sqlglider.catalogs"]
+   my-catalog = "my_package.catalog:MyCatalog"
+   ```
 
 ## Technology Stack
 

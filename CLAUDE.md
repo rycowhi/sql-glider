@@ -113,7 +113,7 @@ uv run sqlglider lineage query.sql --dialect postgres
 
 ### Reading from Stdin
 
-All commands (`lineage`, `tables overview`, `template`) support reading SQL from stdin when no file is provided:
+All commands (`lineage`, `tables overview`, `tables pull`, `template`) support reading SQL from stdin when no file is provided:
 
 ```bash
 # Pipe SQL directly to lineage analysis
@@ -203,6 +203,32 @@ uv run sqlglider tables overview query.sql --templater jinja --var schema=analyt
 - **Table Name**: Fully qualified table name (e.g., `schema.table`)
 - **Usage**: `INPUT` (read from), `OUTPUT` (written to), or `BOTH`
 - **Object Type**: `TABLE`, `VIEW`, `CTE`, or `UNKNOWN`
+
+### DDL Retrieval from Remote Catalogs
+
+Pull DDL definitions from remote data catalogs for tables used in SQL:
+
+```bash
+# Pull DDL for tables in a SQL file (output to stdout)
+uv run sqlglider tables pull query.sql --catalog-type databricks
+
+# Pull DDL to a folder (one file per table)
+uv run sqlglider tables pull query.sql -c databricks -o ./ddl/
+
+# With templating
+uv run sqlglider tables pull query.sql -c databricks --templater jinja --var schema=prod
+
+# From stdin
+echo "SELECT * FROM my_catalog.my_schema.users" | uv run sqlglider tables pull -c databricks
+
+# List available catalog providers
+uv run sqlglider tables pull --list
+```
+
+**Notes:**
+- Requires optional dependency: `pip install sql-glider[databricks]`
+- CTEs are automatically excluded (they don't exist in remote catalogs)
+- Configure authentication via environment variables (`DATABRICKS_HOST`, `DATABRICKS_TOKEN`, `DATABRICKS_WAREHOUSE_ID`) or `sqlglider.toml`
 
 ### Graph-Based Lineage (Cross-File Analysis)
 

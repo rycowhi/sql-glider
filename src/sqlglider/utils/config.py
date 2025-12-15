@@ -23,6 +23,26 @@ class TemplatingConfig(BaseModel):
     variables: Optional[Dict[str, Any]] = None
 
 
+class DatabricksCatalogConfig(BaseModel):
+    """Configuration for Databricks catalog provider.
+
+    All fields are optional - they can also be set via environment variables.
+    """
+
+    host: Optional[str] = None
+    token: Optional[str] = None
+    warehouse_id: Optional[str] = None
+
+
+class CatalogConfig(BaseModel):
+    """Configuration for catalog providers.
+
+    Contains provider-specific configuration under sub-keys.
+    """
+
+    databricks: Optional[DatabricksCatalogConfig] = None
+
+
 class ConfigSettings(BaseModel):
     """Configuration settings for SQL Glider.
 
@@ -35,6 +55,9 @@ class ConfigSettings(BaseModel):
     output_format: Optional[str] = None
     templater: Optional[str] = None
     templating: Optional[TemplatingConfig] = None
+    catalog_type: Optional[str] = None
+    ddl_folder: Optional[str] = None
+    catalog: Optional[CatalogConfig] = None
 
 
 def find_config_file(start_path: Optional[Path] = None) -> Optional[Path]:

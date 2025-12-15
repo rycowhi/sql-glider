@@ -525,6 +525,261 @@ def tables_overview(
         raise typer.Exit(1)
 
 
+@tables_app.command("pull")
+def tables_pull(
+    sql_file: Annotated[
+        typer.FileText,
+        typer.Argument(
+            default_factory=lambda: sys.stdin,
+            show_default="stdin",
+            help="Path to SQL file to analyze (reads from stdin if not provided)",
+        ),
+    ],
+    catalog_type: Optional[str] = typer.Option(
+        None,
+        "--catalog-type",
+        "-c",
+        help="Catalog provider (e.g., 'databricks'). Required if not in config.",
+    ),
+    ddl_folder: Optional[Path] = typer.Option(
+        None,
+        "--ddl-folder",
+        "-o",
+        help="Output folder for DDL files. If not provided, outputs to stdout.",
+    ),
+    dialect: Optional[str] = typer.Option(
+        None,
+        "--dialect",
+        "-d",
+        help="SQL dialect (default: spark, or from config)",
+    ),
+    templater: Optional[str] = typer.Option(
+        None,
+        "--templater",
+        "-t",
+        help="Templater for SQL preprocessing (e.g., 'jinja', 'none')",
+    ),
+    var: Optional[List[str]] = typer.Option(
+        None,
+        "--var",
+        "-v",
+        help="Template variable in key=value format (repeatable)",
+    ),
+    vars_file: Optional[Path] = typer.Option(
+        None,
+        "--vars-file",
+        exists=True,
+        help="Path to variables file (JSON or YAML)",
+    ),
+    list_available: bool = typer.Option(
+        False,
+        "--list",
+        "-l",
+        help="List available catalog providers and exit",
+    ),
+) -> None:
+    """
+    Pull DDL definitions from a remote catalog for tables used in SQL.
+
+    Analyzes the SQL file to find referenced tables, then fetches their DDL
+    from the specified catalog provider (e.g., Databricks Unity Catalog).
+
+    CTEs are automatically excluded since they don't exist in remote catalogs.
+
+    Configuration can be set in sqlglider.toml in the current directory.
+    CLI arguments override configuration file values.
+
+    Examples:
+
+        # Pull DDL for tables in a SQL file (output to stdout)
+        sqlglider tables pull query.sql --catalog-type databricks
+
+        # Pull DDL to a folder (one file per table)
+        sqlglider tables pull query.sql -c databricks -o ./ddl/
+
+        # Use config file for catalog settings
+        sqlglider tables pull query.sql
+
+        # With templating
+        sqlglider tables pull query.sql -c databricks --templater jinja --var schema=prod
+
+        # List available catalog providers
+        sqlglider tables pull --list
+    """
+    from sqlglider.catalog import CatalogError, get_catalog, list_catalogs
+    from sqlglider.lineage.analyzer import ObjectType
+
+    # Handle --list option
+    if list_available:
+        available = list_catalogs()
+        if available:
+            console.print("[bold]Available catalog providers:[/bold]")
+            for name in available:
+                console.print(f"  - {name}")
+        else:
+            console.print(
+                "[yellow]No catalog providers available.[/yellow]\n"
+                "Install a provider with: pip install sql-glider[databricks]"
+            )
+        raise typer.Exit(0)
+
+    # Load configuration from sqlglider.toml (if it exists)
+    config = load_config()
+
+    # Apply priority resolution: CLI args > config > defaults
+    dialect = dialect or config.dialect or "spark"
+    templater = templater or config.templater  # None means no templating
+    catalog_type = catalog_type or config.catalog_type
+    ddl_folder_str = config.ddl_folder if ddl_folder is None else None
+    if ddl_folder is None and ddl_folder_str:
+        ddl_folder = Path(ddl_folder_str)
+
+    # Validate catalog_type is provided
+    if not catalog_type:
+        err_console.print(
+            "[red]Error:[/red] No catalog provider specified. "
+            "Use --catalog-type or set catalog_type in sqlglider.toml."
+        )
+        raise typer.Exit(1)
+
+    # Check if reading from stdin (cross-platform: name is "<stdin>" on all OS)
+    is_stdin = sql_file.name == "<stdin>"
+
+    try:
+        # Check if stdin is being used without input
+        if is_stdin and sys.stdin.isatty():
+            err_console.print(
+                "[red]Error:[/red] No SQL file provided and stdin is interactive. "
+                "Provide a SQL file path or pipe SQL via stdin."
+            )
+            raise typer.Exit(1)
+
+        # Read SQL from file or stdin
+        sql = sql_file.read()
+
+        # Determine source path for templating (None if stdin)
+        source_path = None if is_stdin else Path(sql_file.name)
+
+        # Apply templating if specified
+        sql = _apply_templating(
+            sql,
+            templater_name=templater,
+            cli_vars=var,
+            vars_file=vars_file,
+            config=config,
+            source_path=source_path,
+        )
+
+        # Create analyzer and extract tables
+        analyzer = LineageAnalyzer(sql, dialect=dialect)
+        table_results = analyzer.analyze_tables()
+
+        # Collect unique table names, excluding CTEs
+        table_names: set[str] = set()
+        for result in table_results:
+            for table_info in result.tables:
+                if table_info.object_type != ObjectType.CTE:
+                    table_names.add(table_info.name)
+
+        if not table_names:
+            console.print("[yellow]No tables found in SQL (CTEs excluded).[/yellow]")
+            raise typer.Exit(0)
+
+        # Get catalog instance and configure it
+        catalog = get_catalog(catalog_type)
+
+        # Build catalog config from config file
+        catalog_config: dict[str, str] = {}
+        if (
+            config.catalog
+            and catalog_type == "databricks"
+            and config.catalog.databricks
+        ):
+            db_config = config.catalog.databricks
+            if db_config.host:
+                catalog_config["host"] = db_config.host
+            if db_config.token:
+                catalog_config["token"] = db_config.token
+            if db_config.warehouse_id:
+                catalog_config["warehouse_id"] = db_config.warehouse_id
+
+        catalog.configure(catalog_config)
+
+        # Fetch DDL for all tables
+        console.print(
+            f"[dim]Fetching DDL for {len(table_names)} table(s) from {catalog_type}...[/dim]"
+        )
+        ddl_results = catalog.get_ddl_batch(list(table_names))
+
+        # Count successes and failures
+        successes = 0
+        failures = 0
+
+        # Output DDL
+        if ddl_folder:
+            # Create output folder if it doesn't exist
+            ddl_folder.mkdir(parents=True, exist_ok=True)
+
+            for table_name, ddl in ddl_results.items():
+                if ddl.startswith("ERROR:"):
+                    err_console.print(f"[yellow]Warning:[/yellow] {table_name}: {ddl}")
+                    failures += 1
+                else:
+                    # Write DDL to file named by table identifier
+                    file_name = f"{table_name}.sql"
+                    file_path = ddl_folder / file_name
+                    file_path.write_text(ddl, encoding="utf-8")
+                    successes += 1
+
+            console.print(
+                f"[green]Success:[/green] Wrote {successes} DDL file(s) to {ddl_folder}"
+            )
+            if failures > 0:
+                console.print(
+                    f"[yellow]Warning:[/yellow] {failures} table(s) failed to fetch"
+                )
+        else:
+            # Output to stdout
+            for table_name, ddl in ddl_results.items():
+                if ddl.startswith("ERROR:"):
+                    err_console.print(f"[yellow]Warning:[/yellow] {table_name}: {ddl}")
+                    failures += 1
+                else:
+                    print(f"-- Table: {table_name}")
+                    print(ddl)
+                    print()
+                    successes += 1
+
+            if failures > 0:
+                err_console.print(
+                    f"\n[yellow]Warning:[/yellow] {failures} table(s) failed to fetch"
+                )
+
+    except FileNotFoundError as e:
+        err_console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+
+    except ParseError as e:
+        err_console.print(f"[red]Error:[/red] Failed to parse SQL: {e}")
+        raise typer.Exit(1)
+
+    except TemplaterError as e:
+        err_console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+
+    except CatalogError as e:
+        err_console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+
+    except ValueError as e:
+        err_console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+
+    except Exception as e:
+        err_console.print(f"[red]Error:[/red] Unexpected error: {e}")
+        raise typer.Exit(1)
+
+
 @app.command()
 def template(
     sql_file: Annotated[
