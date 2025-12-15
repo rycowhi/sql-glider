@@ -113,7 +113,7 @@ uv run sqlglider lineage query.sql --dialect postgres
 
 ### Reading from Stdin
 
-All commands (`lineage`, `tables`, `template`) support reading SQL from stdin when no file is provided:
+All commands (`lineage`, `tables overview`, `template`) support reading SQL from stdin when no file is provided:
 
 ```bash
 # Pipe SQL directly to lineage analysis
@@ -132,8 +132,8 @@ FROM customers c
 JOIN orders o ON c.id = o.customer_id
 EOF
 
-# Pipe to tables command
-echo "SELECT * FROM users JOIN orders ON users.id = orders.user_id" | uv run sqlglider tables
+# Pipe to tables overview command
+echo "SELECT * FROM users JOIN orders ON users.id = orders.user_id" | uv run sqlglider tables overview
 
 # Pipe template with variables
 echo "SELECT * FROM {{ schema }}.users" | uv run sqlglider template --var schema=prod
@@ -178,25 +178,25 @@ Extract all tables involved in SQL files with usage and type information:
 
 ```bash
 # List all tables in a SQL file
-uv run sqlglider tables query.sql
+uv run sqlglider tables overview query.sql
 
 # JSON output
-uv run sqlglider tables query.sql --output-format json
+uv run sqlglider tables overview query.sql --output-format json
 
 # CSV output
-uv run sqlglider tables query.sql --output-format csv
+uv run sqlglider tables overview query.sql --output-format csv
 
 # Export to file
-uv run sqlglider tables query.sql --output-format csv --output-file tables.csv
+uv run sqlglider tables overview query.sql --output-format csv --output-file tables.csv
 
 # Different SQL dialect
-uv run sqlglider tables query.sql --dialect postgres
+uv run sqlglider tables overview query.sql --dialect postgres
 
 # Filter to queries referencing a specific table (multi-query files)
-uv run sqlglider tables multi_query.sql --table customers
+uv run sqlglider tables overview multi_query.sql --table customers
 
 # With templating support
-uv run sqlglider tables query.sql --templater jinja --var schema=analytics
+uv run sqlglider tables overview query.sql --templater jinja --var schema=analytics
 ```
 
 **Output includes:**

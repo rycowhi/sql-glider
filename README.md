@@ -142,13 +142,13 @@ List all tables involved in SQL files with usage and type information:
 
 ```bash
 # List all tables in a SQL file
-uv run sqlglider tables query.sql
+uv run sqlglider tables overview query.sql
 
 # JSON output with detailed table info
-uv run sqlglider tables query.sql --output-format json
+uv run sqlglider tables overview query.sql --output-format json
 
 # Export to CSV
-uv run sqlglider tables query.sql --output-format csv --output-file tables.csv
+uv run sqlglider tables overview query.sql --output-format csv --output-file tables.csv
 ```
 
 **Example Output (JSON):**
@@ -534,7 +534,7 @@ Options:
 ### Tables Command
 
 ```
-sqlglider tables <sql_file> [OPTIONS]
+sqlglider tables overview <sql_file> [OPTIONS]
 
 Arguments:
   sql_file                    Path to SQL file to analyze [required]

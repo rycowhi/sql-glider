@@ -332,8 +332,16 @@ def lineage(
         raise typer.Exit(1)
 
 
-@app.command()
-def tables(
+# Tables command group
+tables_app = typer.Typer(
+    name="tables",
+    help="Table-related analysis commands.",
+)
+app.add_typer(tables_app, name="tables")
+
+
+@tables_app.command("overview")
+def tables_overview(
     sql_file: Annotated[
         typer.FileText,
         typer.Argument(
@@ -396,22 +404,22 @@ def tables(
     Examples:
 
         # List all tables in a SQL file
-        sqlglider tables query.sql
+        sqlglider tables overview query.sql
 
         # Export to JSON
-        sqlglider tables query.sql --output-format json
+        sqlglider tables overview query.sql --output-format json
 
         # Export to CSV file
-        sqlglider tables query.sql --output-format csv --output-file tables.csv
+        sqlglider tables overview query.sql --output-format csv --output-file tables.csv
 
         # Use different SQL dialect
-        sqlglider tables query.sql --dialect postgres
+        sqlglider tables overview query.sql --dialect postgres
 
         # Filter to queries referencing a specific table
-        sqlglider tables query.sql --table customers
+        sqlglider tables overview query.sql --table customers
 
         # Analyze templated SQL with Jinja2
-        sqlglider tables query.sql --templater jinja --var schema=analytics
+        sqlglider tables overview query.sql --templater jinja --var schema=analytics
     """
     # Load configuration from sqlglider.toml (if it exists)
     config = load_config()

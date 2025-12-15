@@ -1177,7 +1177,7 @@ class TestGraphBuildWithTemplating:
 
 
 class TestTablesCommand:
-    """Tests for the tables command."""
+    """Tests for the tables overview command."""
 
     @pytest.fixture
     def sample_sql_file(self):
@@ -1259,8 +1259,8 @@ class TestTablesCommand:
         temp_path.unlink()
 
     def test_tables_basic(self, sample_sql_file):
-        """Test basic tables analysis."""
-        result = runner.invoke(app, ["tables", str(sample_sql_file)])
+        """Test basic tables overview analysis."""
+        result = runner.invoke(app, ["tables", "overview", str(sample_sql_file)])
 
         assert result.exit_code == 0
         assert "customers" in result.stdout
@@ -1271,7 +1271,7 @@ class TestTablesCommand:
     def test_tables_json_format(self, sample_sql_file):
         """Test JSON output format."""
         result = runner.invoke(
-            app, ["tables", str(sample_sql_file), "--output-format", "json"]
+            app, ["tables", "overview", str(sample_sql_file), "--output-format", "json"]
         )
 
         assert result.exit_code == 0
@@ -1288,7 +1288,7 @@ class TestTablesCommand:
     def test_tables_csv_format(self, sample_sql_file):
         """Test CSV output format."""
         result = runner.invoke(
-            app, ["tables", str(sample_sql_file), "--output-format", "csv"]
+            app, ["tables", "overview", str(sample_sql_file), "--output-format", "csv"]
         )
 
         assert result.exit_code == 0
@@ -1306,6 +1306,7 @@ class TestTablesCommand:
                 app,
                 [
                     "tables",
+                    "overview",
                     str(sample_sql_file),
                     "--output-format",
                     "json",
@@ -1328,15 +1329,15 @@ class TestTablesCommand:
     def test_tables_with_dialect(self, sample_sql_file):
         """Test specifying SQL dialect."""
         result = runner.invoke(
-            app, ["tables", str(sample_sql_file), "--dialect", "postgres"]
+            app, ["tables", "overview", str(sample_sql_file), "--dialect", "postgres"]
         )
 
         assert result.exit_code == 0
 
     def test_tables_create_view(self, create_view_sql_file):
-        """Test tables command with CREATE VIEW."""
+        """Test tables overview command with CREATE VIEW."""
         result = runner.invoke(
-            app, ["tables", str(create_view_sql_file), "--output-format", "json"]
+            app, ["tables", "overview", str(create_view_sql_file), "--output-format", "json"]
         )
 
         assert result.exit_code == 0
@@ -1355,9 +1356,9 @@ class TestTablesCommand:
         assert table_by_name["orders"]["usage"] == "INPUT"
 
     def test_tables_multi_query(self, multi_query_sql_file):
-        """Test tables with multi-query file."""
+        """Test tables overview with multi-query file."""
         result = runner.invoke(
-            app, ["tables", str(multi_query_sql_file), "--output-format", "json"]
+            app, ["tables", "overview", str(multi_query_sql_file), "--output-format", "json"]
         )
 
         assert result.exit_code == 0
@@ -1381,9 +1382,9 @@ class TestTablesCommand:
         assert query2_tables["summary"]["object_type"] == "VIEW"
 
     def test_tables_cte(self, cte_sql_file):
-        """Test tables command with CTEs."""
+        """Test tables overview command with CTEs."""
         result = runner.invoke(
-            app, ["tables", str(cte_sql_file), "--output-format", "json"]
+            app, ["tables", "overview", str(cte_sql_file), "--output-format", "json"]
         )
 
         assert result.exit_code == 0
@@ -1403,6 +1404,7 @@ class TestTablesCommand:
             app,
             [
                 "tables",
+                "overview",
                 str(multi_query_sql_file),
                 "--table",
                 "orders",
@@ -1421,14 +1423,14 @@ class TestTablesCommand:
 
     def test_tables_file_not_found(self):
         """Test error handling for non-existent file."""
-        result = runner.invoke(app, ["tables", "/path/that/does/not/exist.sql"])
+        result = runner.invoke(app, ["tables", "overview", "/path/that/does/not/exist.sql"])
 
         assert result.exit_code in [1, 2]
 
     def test_tables_invalid_output_format(self, sample_sql_file):
         """Test error handling for invalid output format."""
         result = runner.invoke(
-            app, ["tables", str(sample_sql_file), "--output-format", "xml"]
+            app, ["tables", "overview", str(sample_sql_file), "--output-format", "xml"]
         )
 
         assert result.exit_code == 1
@@ -1440,6 +1442,7 @@ class TestTablesCommand:
             app,
             [
                 "tables",
+                "overview",
                 str(sample_sql_file),
                 "-d",
                 "spark",
@@ -1452,7 +1455,7 @@ class TestTablesCommand:
         assert "{" in result.stdout
 
     def test_tables_with_templating(self):
-        """Test tables command with templating."""
+        """Test tables overview command with templating."""
         with TemporaryDirectory() as tmpdir:
             tmppath = Path(tmpdir)
             sql_file = tmppath / "query.sql"
@@ -1462,6 +1465,7 @@ class TestTablesCommand:
                 app,
                 [
                     "tables",
+                    "overview",
                     str(sql_file),
                     "--templater",
                     "jinja",
@@ -1518,23 +1522,23 @@ class TestStdinSupport:
         assert result.exit_code == 0
 
     def test_tables_from_stdin(self):
-        """Test tables command reads from stdin when no file provided."""
+        """Test tables overview command reads from stdin when no file provided."""
         sql_content = (
             "SELECT * FROM customers JOIN orders ON customers.id = orders.customer_id"
         )
 
-        result = runner.invoke(app, ["tables"], input=sql_content)
+        result = runner.invoke(app, ["tables", "overview"], input=sql_content)
 
         assert result.exit_code == 0
         assert "customers" in result.stdout
         assert "orders" in result.stdout
 
     def test_tables_from_stdin_json_format(self):
-        """Test tables command with stdin and JSON output."""
+        """Test tables overview command with stdin and JSON output."""
         sql_content = "SELECT * FROM users"
 
         result = runner.invoke(
-            app, ["tables", "--output-format", "json"], input=sql_content
+            app, ["tables", "overview", "--output-format", "json"], input=sql_content
         )
 
         assert result.exit_code == 0
