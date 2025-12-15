@@ -212,3 +212,4 @@ src/sqlglider/_version.py
 # Random Local Stuff
 junk.md
 megagraph.json
+/sqlglider.toml 
