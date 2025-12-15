@@ -696,12 +696,14 @@ def tables_pull(
             and config.catalog.databricks
         ):
             db_config = config.catalog.databricks
+            if db_config.warehouse_id:
+                catalog_config["warehouse_id"] = db_config.warehouse_id
+            if db_config.profile:
+                catalog_config["profile"] = db_config.profile
             if db_config.host:
                 catalog_config["host"] = db_config.host
             if db_config.token:
                 catalog_config["token"] = db_config.token
-            if db_config.warehouse_id:
-                catalog_config["warehouse_id"] = db_config.warehouse_id
 
         catalog.configure(catalog_config)
 
