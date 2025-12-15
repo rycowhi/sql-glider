@@ -40,25 +40,47 @@ class DatabricksCatalog(Catalog):
     Fetches table DDL using the Databricks SDK's statement execution API.
 
     Authentication:
-        Authentication is handled by the Databricks SDK, which supports:
-        - Environment variables: DATABRICKS_HOST, DATABRICKS_TOKEN
-        - Databricks CLI profile (~/.databrickscfg)
-        - Azure, GCP, or AWS authentication methods
+        Authentication is handled by the Databricks SDK's unified authentication,
+        which automatically tries multiple methods in order:
+
+        1. Direct configuration (host + token in sqlglider.toml)
+        2. Environment variables (DATABRICKS_HOST, DATABRICKS_TOKEN, etc.)
+        3. Databricks CLI profile (~/.databrickscfg) - use 'profile' config option
+        4. Azure CLI authentication (for Azure Databricks)
+        5. Google Cloud authentication (for GCP Databricks)
+        6. OAuth M2M (client credentials) via environment variables:
+           - DATABRICKS_CLIENT_ID
+           - DATABRICKS_CLIENT_SECRET
+
+        For OAuth M2M, set these environment variables:
+            export DATABRICKS_HOST=https://your-workspace.cloud.databricks.com
+            export DATABRICKS_CLIENT_ID=your-client-id
+            export DATABRICKS_CLIENT_SECRET=your-client-secret
+
+        For Databricks CLI profile, either:
+            - Configure DEFAULT profile in ~/.databrickscfg
+            - Set profile name in sqlglider.toml: profile = "my-profile"
 
     Configuration:
         - warehouse_id (required): SQL warehouse ID for statement execution
-        - host (optional): Databricks workspace URL (can also use DATABRICKS_HOST env var)
-        - token (optional): Databricks access token (can also use DATABRICKS_TOKEN env var)
+        - profile (optional): Databricks CLI profile name from ~/.databrickscfg
+        - host (optional): Databricks workspace URL
+        - token (optional): Personal access token (legacy, prefer OAuth)
 
     Example:
+        >>> # Using environment variables or CLI profile (recommended)
         >>> catalog = DatabricksCatalog()
         >>> catalog.configure({"warehouse_id": "abc123def456"})
         >>> ddl = catalog.get_ddl("my_catalog.my_schema.my_table")
+
+        >>> # Using specific CLI profile
+        >>> catalog.configure({"warehouse_id": "abc123", "profile": "dev-workspace"})
     """
 
     def __init__(self) -> None:
         """Initialize the Databricks catalog."""
         self._warehouse_id: Optional[str] = None
+        self._profile: Optional[str] = None
         self._host: Optional[str] = None
         self._token: Optional[str] = None
         self._client: Any = None
@@ -74,8 +96,9 @@ class DatabricksCatalog(Catalog):
         Args:
             config: Configuration dictionary with optional keys:
                 - warehouse_id: SQL warehouse ID (required, or set DATABRICKS_WAREHOUSE_ID)
-                - host: Databricks workspace URL (or set DATABRICKS_HOST)
-                - token: Access token (or set DATABRICKS_TOKEN)
+                - profile: Databricks CLI profile name from ~/.databrickscfg
+                - host: Databricks workspace URL (only needed if not using profile/env)
+                - token: Personal access token (legacy, prefer OAuth or profile)
 
         Raises:
             CatalogError: If warehouse_id is not provided and not in environment.
@@ -93,9 +116,13 @@ class DatabricksCatalog(Catalog):
                 "or via the DATABRICKS_WAREHOUSE_ID environment variable."
             )
 
-        # Get optional host and token (SDK will also check env vars)
-        self._host = config.get("host") or os.environ.get("DATABRICKS_HOST")
-        self._token = config.get("token") or os.environ.get("DATABRICKS_TOKEN")
+        # Get optional profile for CLI profile-based auth
+        self._profile = config.get("profile")
+
+        # Get optional host and token - only from config, not env vars
+        # Let the SDK handle env var discovery for better unified auth support
+        self._host = config.get("host")
+        self._token = config.get("token")
 
         # Reset client so it gets recreated with new config
         self._client = None
@@ -103,11 +130,18 @@ class DatabricksCatalog(Catalog):
     def _get_client(self) -> Any:
         """Get or create the Databricks WorkspaceClient.
 
+        The SDK uses unified authentication, trying methods in this order:
+        1. Explicit host/token if provided in config
+        2. Profile from ~/.databrickscfg if specified
+        3. Environment variables (DATABRICKS_HOST, DATABRICKS_TOKEN, etc.)
+        4. OAuth M2M via DATABRICKS_CLIENT_ID/DATABRICKS_CLIENT_SECRET
+        5. Azure CLI / Google Cloud auth for cloud-hosted workspaces
+
         Returns:
             The WorkspaceClient instance.
 
         Raises:
-            CatalogError: If the SDK is not installed or configuration is invalid.
+            CatalogError: If the SDK is not installed or authentication fails.
         """
         _check_databricks_sdk()
 
@@ -115,7 +149,11 @@ class DatabricksCatalog(Catalog):
             from databricks.sdk import WorkspaceClient
 
             # Build kwargs for WorkspaceClient
+            # Only pass values that are explicitly configured
+            # Let SDK handle env var discovery for unified auth
             kwargs: Dict[str, Any] = {}
+            if self._profile:
+                kwargs["profile"] = self._profile
             if self._host:
                 kwargs["host"] = self._host
             if self._token:
@@ -124,7 +162,7 @@ class DatabricksCatalog(Catalog):
             try:
                 self._client = WorkspaceClient(**kwargs)
             except Exception as e:
-                raise CatalogError(f"Failed to create Databricks client: {e}") from e
+                raise CatalogError(f"Failed to authenticate with Databricks: {e}") from e
 
         return self._client
 

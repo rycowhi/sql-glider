@@ -27,11 +27,13 @@ class DatabricksCatalogConfig(BaseModel):
     """Configuration for Databricks catalog provider.
 
     All fields are optional - they can also be set via environment variables.
+    The SDK supports unified authentication with multiple methods.
     """
 
-    host: Optional[str] = None
-    token: Optional[str] = None
     warehouse_id: Optional[str] = None
+    profile: Optional[str] = None  # Databricks CLI profile from ~/.databrickscfg
+    host: Optional[str] = None
+    token: Optional[str] = None  # Legacy PAT, prefer OAuth or profile
 
 
 class CatalogConfig(BaseModel):

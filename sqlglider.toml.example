@@ -58,11 +58,29 @@
 # ddl_folder = "./ddl"
 
 # Databricks-specific configuration
-# Environment variables can also be used: DATABRICKS_HOST, DATABRICKS_TOKEN, DATABRICKS_WAREHOUSE_ID
+# The Databricks SDK supports unified authentication with multiple methods:
+#
+# 1. Databricks CLI profile (recommended):
+#    - Configure your profile in ~/.databrickscfg using `databricks configure`
+#    - Set profile name below, or use DEFAULT profile automatically
+#
+# 2. OAuth M2M (machine-to-machine):
+#    - Set environment variables:
+#      export DATABRICKS_HOST=https://your-workspace.cloud.databricks.com
+#      export DATABRICKS_CLIENT_ID=your-client-id
+#      export DATABRICKS_CLIENT_SECRET=your-client-secret
+#
+# 3. Personal Access Token (legacy):
+#    - Set DATABRICKS_HOST and DATABRICKS_TOKEN environment variables
+#    - Or configure host/token below (not recommended for security)
+#
+# 4. Cloud provider authentication:
+#    - Azure: Uses Azure CLI authentication automatically
+#    - GCP: Uses Google Cloud authentication automatically
+#
 # [sqlglider.catalog.databricks]
-# host = "https://your-workspace.cloud.databricks.com"
-# token = "dapi..."  # Or use DATABRICKS_TOKEN env var (recommended)
 # warehouse_id = "abc123..."  # Required - SQL warehouse for executing queries
+# profile = "my-profile"      # Optional - Databricks CLI profile name
 
 # ============================================================================
 # Example Configurations

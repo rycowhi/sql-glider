@@ -47,23 +47,23 @@ class TestDatabricksCatalogConfigure:
         assert catalog._host == "https://test.databricks.com"
         assert catalog._token == "dapi-test-token"
 
-    def test_configure_from_env_vars(self, mocker: MockerFixture):
-        """Test configuring from environment variables."""
+    def test_configure_warehouse_from_env_var(self, mocker: MockerFixture):
+        """Test configuring warehouse_id from environment variable."""
         mocker.patch.dict(
             os.environ,
             {
                 "DATABRICKS_WAREHOUSE_ID": "env-warehouse",
-                "DATABRICKS_HOST": "https://env.databricks.com",
-                "DATABRICKS_TOKEN": "env-token",
             },
         )
 
         catalog = DatabricksCatalog()
         catalog.configure({})
 
+        # Only warehouse_id is read from env var by configure()
+        # Host/token are handled by the SDK's unified auth
         assert catalog._warehouse_id == "env-warehouse"
-        assert catalog._host == "https://env.databricks.com"
-        assert catalog._token == "env-token"
+        assert catalog._host is None
+        assert catalog._token is None
 
     def test_configure_cli_overrides_env(self, mocker: MockerFixture):
         """Test that config values override environment variables."""
@@ -78,6 +78,16 @@ class TestDatabricksCatalogConfigure:
         catalog.configure({"warehouse_id": "config-warehouse"})
 
         assert catalog._warehouse_id == "config-warehouse"
+
+    def test_configure_with_profile(self, mocker: MockerFixture):
+        """Test configuring with Databricks CLI profile."""
+        mocker.patch.dict(os.environ, {}, clear=True)
+
+        catalog = DatabricksCatalog()
+        catalog.configure({"warehouse_id": "test-warehouse", "profile": "dev-profile"})
+
+        assert catalog._warehouse_id == "test-warehouse"
+        assert catalog._profile == "dev-profile"
 
     def test_configure_raises_without_warehouse_id(self, mocker: MockerFixture):
         """Test that configure raises error without warehouse_id."""
