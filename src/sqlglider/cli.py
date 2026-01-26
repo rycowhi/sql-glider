@@ -1091,9 +1091,7 @@ def graph_build(
             all_files: list[Path] = []
             for path in paths:
                 if path.is_dir():
-                    pattern = (
-                        f"**/{glob_pattern}" if recursive else glob_pattern
-                    )
+                    pattern = f"**/{glob_pattern}" if recursive else glob_pattern
                     all_files.extend(
                         f for f in sorted(path.glob(pattern)) if f.is_file()
                     )
