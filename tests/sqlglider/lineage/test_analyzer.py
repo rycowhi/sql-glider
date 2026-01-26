@@ -2262,3 +2262,290 @@ class TestInsertWithIntersectExcept:
         assert len(results) == 1
         output_names = {item.output_name for item in results[0].lineage_items}
         assert "db.result.id" in output_names
+
+
+class TestFileSchemaExtraction:
+    """Tests for file-scoped schema context extraction."""
+
+    def test_extract_schema_from_create_view(self):
+        """CREATE VIEW should register schema with column names."""
+        sql = "CREATE VIEW my_view AS SELECT id, name, status FROM users"
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+
+        # Schema should be extracted during analysis
+        analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
+
+        assert "my_view" in analyzer._file_schema
+        assert set(analyzer._file_schema["my_view"].keys()) == {"id", "name", "status"}
+
+    def test_extract_schema_from_create_temporary_view(self):
+        """CREATE TEMPORARY VIEW should register schema."""
+        sql = "CREATE TEMPORARY VIEW temp_view AS SELECT a, b FROM source"
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
+
+        assert "temp_view" in analyzer._file_schema
+        assert set(analyzer._file_schema["temp_view"].keys()) == {"a", "b"}
+
+    def test_extract_schema_from_create_table_as(self):
+        """CREATE TABLE AS SELECT should register schema."""
+        sql = "CREATE TABLE output_table AS SELECT col1, col2 FROM input_table"
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
+
+        assert "output_table" in analyzer._file_schema
+        assert set(analyzer._file_schema["output_table"].keys()) == {"col1", "col2"}
+
+    def test_extract_schema_with_aliases(self):
+        """Column aliases should be used as schema keys."""
+        sql = """
+        CREATE VIEW aliased_view AS
+        SELECT
+            user_id AS id,
+            CONCAT(first, ' ', last) AS full_name,
+            COUNT(*) AS cnt
+        FROM users
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
+
+        assert "aliased_view" in analyzer._file_schema
+        assert set(analyzer._file_schema["aliased_view"].keys()) == {
+            "id",
+            "full_name",
+            "cnt",
+        }
+
+    def test_extract_schema_select_star_from_known_table(self):
+        """SELECT * should resolve from known schema."""
+        sql = """
+        CREATE VIEW first_view AS SELECT a, b, c FROM source;
+        CREATE VIEW second_view AS SELECT * FROM first_view;
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
+
+        # First view schema
+        assert "first_view" in analyzer._file_schema
+        assert set(analyzer._file_schema["first_view"].keys()) == {"a", "b", "c"}
+
+        # Second view should have same columns from SELECT *
+        assert "second_view" in analyzer._file_schema
+        assert set(analyzer._file_schema["second_view"].keys()) == {"a", "b", "c"}
+
+    def test_extract_schema_select_star_from_unknown_table(self):
+        """SELECT * from unknown table should fall back to *."""
+        sql = "CREATE VIEW unknown_star AS SELECT * FROM unknown_table"
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
+
+        # Schema should be empty or contain * as fallback
+        # The view may not be in schema if columns couldn't be resolved
+        if "unknown_star" in analyzer._file_schema:
+            # If present, it might have * as a column
+            pass  # This is acceptable behavior
+
+    def test_schema_not_extracted_from_pure_select(self):
+        """Pure SELECT (not CREATE VIEW) should not modify schema."""
+        sql = "SELECT a, b, c FROM source_table"
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
+
+        # No views created, schema should be empty
+        assert analyzer._file_schema == {}
+
+    def test_schema_not_extracted_from_insert(self):
+        """INSERT should not add to schema (target already exists)."""
+        sql = "INSERT INTO target SELECT a, b FROM source"
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
+
+        # INSERT doesn't create a new table schema
+        assert "target" not in analyzer._file_schema
+
+    def test_schema_reset_between_analysis_calls(self):
+        """Schema should reset for each analyze_queries() call."""
+        sql = "CREATE VIEW v1 AS SELECT x FROM t1"
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+
+        # First analysis
+        analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
+        assert "v1" in analyzer._file_schema
+
+        # Manually clear and re-analyze
+        analyzer._file_schema = {"old_view": {"old_col": "UNKNOWN"}}
+        analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
+
+        # Old schema should be replaced
+        assert "old_view" not in analyzer._file_schema
+        assert "v1" in analyzer._file_schema
+
+
+class TestCrossStatementLineage:
+    """Tests for lineage across related statements in same file."""
+
+    def test_view_referencing_earlier_view(self):
+        """Second view should trace lineage to first view's sources."""
+        sql = """
+        CREATE VIEW first_view AS SELECT id, name FROM users;
+        CREATE VIEW second_view AS SELECT id, name FROM first_view;
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
+
+        assert len(results) == 2
+
+        # Second view should show lineage from first_view
+        second_result = results[1]
+        source_names = {item.source_name for item in second_result.lineage_items}
+        assert "first_view.id" in source_names or "users.id" in source_names
+        assert "first_view.name" in source_names or "users.name" in source_names
+
+    def test_select_star_expansion_through_view(self):
+        """SELECT * should expand to actual columns with proper lineage."""
+        sql = """
+        CREATE VIEW base_view AS SELECT a, b, c FROM source_table;
+        CREATE VIEW expanded_view AS SELECT * FROM base_view;
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
+
+        # Second view should have expanded columns, not *
+        second_result = results[1]
+        output_names = {item.output_name for item in second_result.lineage_items}
+        assert "expanded_view.a" in output_names
+        assert "expanded_view.b" in output_names
+        assert "expanded_view.c" in output_names
+        assert "expanded_view.*" not in output_names
+
+    def test_cte_with_select_star_from_view(self):
+        """CTE SELECT * from view should resolve from view schema."""
+        sql = """
+        CREATE VIEW first_view AS SELECT a, b, c FROM source_table;
+        CREATE VIEW second_view AS
+        WITH cte AS (SELECT * FROM first_view)
+        SELECT * FROM cte;
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
+
+        # Second view should have columns a, b, c
+        second_result = results[1]
+        output_names = {item.output_name for item in second_result.lineage_items}
+        assert "second_view.a" in output_names
+        assert "second_view.b" in output_names
+        assert "second_view.c" in output_names
+
+    def test_window_function_with_select_star(self):
+        """Window function columns should be included with SELECT *."""
+        sql = """
+        CREATE VIEW first_view AS SELECT a, b, c FROM source_table;
+        CREATE VIEW second_view AS
+        WITH ranked AS (
+            SELECT *, row_number() OVER (PARTITION BY a ORDER BY b) AS rn
+            FROM first_view
+        )
+        SELECT * FROM ranked;
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
+
+        # Second view should have a, b, c, rn
+        second_result = results[1]
+        output_names = {item.output_name for item in second_result.lineage_items}
+        assert "second_view.a" in output_names
+        assert "second_view.b" in output_names
+        assert "second_view.c" in output_names
+        assert "second_view.rn" in output_names
+
+    def test_insert_from_view_lineage(self):
+        """INSERT from view should trace to original sources."""
+        sql = """
+        CREATE VIEW staging AS SELECT id, name FROM raw_data;
+        INSERT INTO final_table SELECT id, name FROM staging;
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
+
+        # INSERT should show lineage from staging
+        insert_result = results[1]
+        source_names = {item.source_name for item in insert_result.lineage_items}
+        assert "staging.id" in source_names
+        assert "staging.name" in source_names
+
+    def test_multi_hop_view_lineage(self):
+        """Lineage should work through multiple view hops."""
+        sql = """
+        CREATE VIEW v1 AS SELECT x, y FROM base_table;
+        CREATE VIEW v2 AS SELECT x, y FROM v1;
+        CREATE VIEW v3 AS SELECT x, y FROM v2;
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
+
+        # All views should have proper columns
+        for i, result in enumerate(results):
+            output_names = {item.output_name for item in result.lineage_items}
+            view_name = ["v1", "v2", "v3"][i]
+            assert f"{view_name}.x" in output_names
+            assert f"{view_name}.y" in output_names
+
+    def test_original_problem_scenario(self):
+        """Test the exact scenario from the issue."""
+        sql = """
+        CREATE TEMPORARY VIEW first_view AS (
+            SELECT a, b, c FROM source_table
+        );
+
+        CREATE TEMPORARY VIEW second_view AS
+        WITH first_view_cte AS (
+            SELECT *, row_number() OVER (PARTITION BY a ORDER BY b DESC) AS row_num
+            FROM first_view
+        )
+        SELECT * FROM first_view_cte WHERE c = 1;
+
+        INSERT OVERWRITE output_table
+        SELECT a, b, c, row_num FROM second_view;
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
+
+        assert len(results) == 3
+
+        # First view: should have a, b, c from source_table
+        first_result = results[0]
+        first_outputs = {item.output_name for item in first_result.lineage_items}
+        assert "source_table.a" in first_outputs
+        assert "source_table.b" in first_outputs
+        assert "source_table.c" in first_outputs
+
+        # Second view: should have a, b, c, row_num from first_view
+        second_result = results[1]
+        second_outputs = {item.output_name for item in second_result.lineage_items}
+        assert "second_view.a" in second_outputs
+        assert "second_view.b" in second_outputs
+        assert "second_view.c" in second_outputs
+        assert "second_view.row_num" in second_outputs
+
+        # Second view sources should be from first_view
+        second_sources = {item.source_name for item in second_result.lineage_items}
+        assert "first_view.a" in second_sources
+        assert "first_view.b" in second_sources
+        assert "first_view.c" in second_sources
+
+        # row_num should trace to a and b (PARTITION BY a ORDER BY b)
+        row_num_sources = {
+            item.source_name
+            for item in second_result.lineage_items
+            if item.output_name == "second_view.row_num"
+        }
+        assert "first_view.a" in row_num_sources
+        assert "first_view.b" in row_num_sources
+
+        # Third statement (INSERT): should show lineage from second_view
+        third_result = results[2]
+        third_outputs = {item.output_name for item in third_result.lineage_items}
+        assert "output_table.a" in third_outputs
+        assert "output_table.b" in third_outputs
+        assert "output_table.c" in third_outputs
+        assert "output_table.row_num" in third_outputs

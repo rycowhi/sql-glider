@@ -1,7 +1,7 @@
 """Core lineage analysis using SQLGlot."""
 
 from enum import Enum
-from typing import Callable, Iterator, List, Optional, Set, Tuple, Union
+from typing import Callable, Dict, Iterator, List, Optional, Set, Tuple, Union
 
 from pydantic import BaseModel, Field
 from sqlglot import exp, parse
@@ -99,6 +99,9 @@ class LineageAnalyzer:
         self.sql = sql
         self.dialect = dialect
         self._skipped_queries: List[SkippedQuery] = []
+        # File-scoped schema context for cross-statement lineage
+        # Maps table/view names to their column definitions
+        self._file_schema: Dict[str, Dict[str, str]] = {}
 
         try:
             # Parse all statements in the SQL string
@@ -156,7 +159,24 @@ class LineageAnalyzer:
             # DML/DDL: Use target table for output column qualification
             # The columns are from the SELECT, but qualified with the target table
             projections = self._get_select_projections(select_node)
+            first_select = self._get_first_select(select_node)
+
             for projection in projections:
+                # Handle SELECT * by resolving from file schema
+                if isinstance(projection, exp.Star):
+                    if first_select:
+                        star_columns = self._resolve_star_columns(first_select)
+                        for star_col in star_columns:
+                            qualified_name = f"{target_table}.{star_col}"
+                            columns.append(qualified_name)
+                            self._column_mapping[qualified_name] = star_col
+                    if not columns:
+                        # Fallback: can't resolve *, use * as column name
+                        qualified_name = f"{target_table}.*"
+                        columns.append(qualified_name)
+                        self._column_mapping[qualified_name] = "*"
+                    continue
+
                 # Get the underlying expression (unwrap alias if present)
                 if isinstance(projection, exp.Alias):
                     # For aliased columns, use the alias as the column name
@@ -324,6 +344,7 @@ class LineageAnalyzer:
         """
         results = []
         self._skipped_queries = []  # Reset skipped queries for this analysis
+        self._file_schema = {}  # Reset file schema for this analysis run
 
         for query_index, expr, preview in self._iterate_queries(table_filter):
             # Temporarily swap self.expr to analyze this query
@@ -375,6 +396,9 @@ class LineageAnalyzer:
                     )
                 )
             finally:
+                # Extract schema from this statement AFTER analysis
+                # This builds up context for subsequent statements to use
+                self._extract_schema_from_statement(expr)
                 # Restore original expression
                 self.expr = original_expr
 
@@ -702,7 +726,13 @@ class LineageAnalyzer:
                 lineage_col = self._column_mapping.get(col, col)
 
                 # Get lineage tree for this column using current query SQL only
-                node = lineage(lineage_col, current_query_sql, dialect=self.dialect)
+                # Pass file schema to enable SELECT * expansion for known tables/views
+                node = lineage(
+                    lineage_col,
+                    current_query_sql,
+                    dialect=self.dialect,
+                    schema=self._file_schema if self._file_schema else None,
+                )
 
                 # Collect all source columns
                 sources: Set[str] = set()
@@ -1235,3 +1265,187 @@ class LineageAnalyzer:
             preview = self._generate_query_preview(expr)
 
             yield idx, expr, preview
+
+    # -------------------------------------------------------------------------
+    # File-scoped schema context methods
+    # -------------------------------------------------------------------------
+
+    def _extract_schema_from_statement(self, expr: exp.Expression) -> None:
+        """
+        Extract column definitions from CREATE VIEW/TABLE AS SELECT statements.
+
+        This method builds up file-scoped schema context as statements are processed,
+        enabling SQLGlot to correctly expand SELECT * and trace cross-statement references.
+
+        Args:
+            expr: The SQL expression to extract schema from
+        """
+        # Only handle CREATE VIEW or CREATE TABLE (AS SELECT)
+        if not isinstance(expr, exp.Create):
+            return
+        if expr.kind not in ("VIEW", "TABLE"):
+            return
+
+        # Get target table/view name
+        target = expr.this
+        if isinstance(target, exp.Schema):
+            target = target.this
+        if not isinstance(target, exp.Table):
+            return
+
+        target_name = self._get_qualified_table_name(target)
+
+        # Get the SELECT node from the CREATE statement
+        select_node = expr.expression
+        if select_node is None:
+            return
+
+        # Handle Subquery wrapper (e.g., CREATE VIEW AS (SELECT ...))
+        if isinstance(select_node, exp.Subquery):
+            select_node = select_node.this
+
+        if not isinstance(
+            select_node, (exp.Select, exp.Union, exp.Intersect, exp.Except)
+        ):
+            return
+
+        # Extract column names from the SELECT
+        columns = self._extract_columns_from_select(select_node)
+
+        if columns:
+            # Store with UNKNOWN type - SQLGlot only needs column names for expansion
+            self._file_schema[target_name] = {col: "UNKNOWN" for col in columns}
+
+    def _extract_columns_from_select(
+        self, select_node: Union[exp.Select, exp.Union, exp.Intersect, exp.Except]
+    ) -> List[str]:
+        """
+        Extract column names from a SELECT statement.
+
+        Handles aliases, direct column references, and SELECT * by resolving
+        against the known file schema.
+
+        Args:
+            select_node: The SELECT or set operation expression
+
+        Returns:
+            List of column names
+        """
+        columns: List[str] = []
+
+        # Get projections (for UNION, use first branch)
+        projections = self._get_select_projections(select_node)
+        first_select = self._get_first_select(select_node)
+
+        for projection in projections:
+            if isinstance(projection, exp.Alias):
+                # Use the alias name as the column name
+                columns.append(projection.alias)
+            elif isinstance(projection, exp.Column):
+                # Use the column name
+                columns.append(projection.name)
+            elif isinstance(projection, exp.Star):
+                # Resolve SELECT * from known schema
+                if first_select:
+                    star_columns = self._resolve_star_columns(first_select)
+                    columns.extend(star_columns)
+            else:
+                # For expressions without alias, use SQL representation
+                col_sql = projection.sql(dialect=self.dialect)
+                columns.append(col_sql)
+
+        return columns
+
+    def _resolve_star_columns(self, select_node: exp.Select) -> List[str]:
+        """
+        Resolve SELECT * to actual column names from known file schema or CTEs.
+
+        Args:
+            select_node: The SELECT node containing the * reference
+
+        Returns:
+            List of column names if source is known, empty list otherwise
+        """
+        columns: List[str] = []
+
+        # Get the source table(s) from FROM clause
+        from_clause = select_node.args.get("from")
+        if not from_clause or not isinstance(from_clause, exp.From):
+            return columns
+
+        source = from_clause.this
+
+        # Handle table reference
+        if isinstance(source, exp.Table):
+            source_name = self._get_qualified_table_name(source)
+
+            # First check file schema (views/tables from previous statements)
+            if source_name in self._file_schema:
+                columns.extend(self._file_schema[source_name].keys())
+            else:
+                # Check if this is a CTE reference within the same statement
+                cte_columns = self._resolve_cte_columns(source_name, select_node)
+                columns.extend(cte_columns)
+
+        # Handle subquery - can't resolve without deeper analysis
+        elif isinstance(source, exp.Subquery) and source.alias:
+            # Check if this subquery alias is in file schema (unlikely)
+            if source.alias in self._file_schema:
+                columns.extend(self._file_schema[source.alias].keys())
+
+        return columns
+
+    def _resolve_cte_columns(self, cte_name: str, select_node: exp.Select) -> List[str]:
+        """
+        Resolve columns from a CTE definition within the same statement.
+
+        Args:
+            cte_name: Name of the CTE to resolve
+            select_node: The SELECT node that references the CTE
+
+        Returns:
+            List of column names from the CTE, empty if CTE not found
+        """
+        # Walk up the tree to find the WITH clause containing this CTE
+        parent = select_node
+        while parent:
+            if hasattr(parent, "args") and parent.args.get("with"):
+                with_clause = parent.args["with"]
+                for cte in with_clause.expressions:
+                    if isinstance(cte, exp.CTE) and cte.alias == cte_name:
+                        # Found the CTE - extract its columns
+                        cte_select = cte.this
+                        if isinstance(cte_select, exp.Select):
+                            return self._extract_cte_select_columns(cte_select)
+            parent = parent.parent if hasattr(parent, "parent") else None
+
+        return []
+
+    def _extract_cte_select_columns(self, cte_select: exp.Select) -> List[str]:
+        """
+        Extract column names from a CTE's SELECT statement.
+
+        This handles SELECT * within the CTE by resolving against file schema.
+
+        Args:
+            cte_select: The SELECT expression within the CTE
+
+        Returns:
+            List of column names
+        """
+        columns: List[str] = []
+
+        for projection in cte_select.expressions:
+            if isinstance(projection, exp.Alias):
+                columns.append(projection.alias)
+            elif isinstance(projection, exp.Column):
+                columns.append(projection.name)
+            elif isinstance(projection, exp.Star):
+                # Resolve SELECT * in CTE from file schema
+                star_columns = self._resolve_star_columns(cte_select)
+                columns.extend(star_columns)
+            else:
+                col_sql = projection.sql(dialect=self.dialect)
+                columns.append(col_sql)
+
+        return columns

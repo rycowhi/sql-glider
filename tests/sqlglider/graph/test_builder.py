@@ -428,3 +428,153 @@ class TestGraphBuilderInsertWithUnion:
         assert "db.source_a.last" in upstream_ids
         assert "db.source_b.first" in upstream_ids
         assert "db.source_b.last" in upstream_ids
+
+
+class TestGraphBuilderCreateViewWithCTEAndWindowFunction:
+    """Tests for CREATE VIEW statements with CTEs and window functions."""
+
+    def test_create_view_with_cte_and_row_number(self, tmp_path):
+        """CREATE VIEW with CTE and ROW_NUMBER() OVER (PARTITION BY ...) should work."""
+        sql_file = tmp_path / "query.sql"
+        sql_file.write_text("""
+            CREATE VIEW my_view AS
+            WITH ranked_orders AS (
+                SELECT
+                    customer_id,
+                    order_date,
+                    amount,
+                    ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY order_date DESC) as rn
+                FROM orders
+            )
+            SELECT customer_id, order_date, amount
+            FROM ranked_orders
+            WHERE rn = 1
+        """)
+
+        builder = GraphBuilder(dialect="spark")
+        builder.add_file(sql_file)
+        graph = builder.build()
+
+        # Should have nodes created successfully
+        assert graph.metadata.total_nodes > 0
+        assert graph.metadata.total_edges > 0
+
+        # Check that output columns are qualified with the view name
+        node_ids = {node.identifier for node in graph.nodes}
+        assert "my_view.customer_id" in node_ids
+        assert "my_view.order_date" in node_ids
+        assert "my_view.amount" in node_ids
+
+        # Source columns from orders table should exist
+        assert "orders.customer_id" in node_ids
+        assert "orders.order_date" in node_ids
+        assert "orders.amount" in node_ids
+
+    def test_create_view_with_cte_row_number_lineage_tracing(self, tmp_path):
+        """Test that lineage correctly traces through CTE with window function."""
+        from sqlglider.graph.query import GraphQuerier
+
+        sql_file = tmp_path / "query.sql"
+        sql_file.write_text("""
+            CREATE VIEW latest_orders AS
+            WITH ranked AS (
+                SELECT
+                    o.customer_id,
+                    o.order_date,
+                    o.total_amount,
+                    ROW_NUMBER() OVER (PARTITION BY o.customer_id ORDER BY o.order_date DESC) as rn
+                FROM sales.orders o
+            )
+            SELECT customer_id, order_date, total_amount
+            FROM ranked
+            WHERE rn = 1
+        """)
+
+        builder = GraphBuilder(dialect="spark")
+        builder.add_file(sql_file)
+        graph = builder.build()
+
+        # Query upstream from output columns
+        querier = GraphQuerier(graph)
+
+        # customer_id should trace back to sales.orders.customer_id
+        upstream_customer = querier.find_upstream("latest_orders.customer_id")
+        upstream_ids = {n.identifier for n in upstream_customer.related_columns}
+        assert "sales.orders.customer_id" in upstream_ids
+
+        # total_amount should trace back to sales.orders.total_amount
+        upstream_amount = querier.find_upstream("latest_orders.total_amount")
+        upstream_ids = {n.identifier for n in upstream_amount.related_columns}
+        assert "sales.orders.total_amount" in upstream_ids
+
+    def test_create_view_multiple_window_functions(self, tmp_path):
+        """Test CREATE VIEW with multiple window functions."""
+        sql_file = tmp_path / "query.sql"
+        sql_file.write_text("""
+            CREATE VIEW customer_rankings AS
+            WITH metrics AS (
+                SELECT
+                    customer_id,
+                    total_spend,
+                    ROW_NUMBER() OVER (ORDER BY total_spend DESC) as spend_rank,
+                    RANK() OVER (PARTITION BY region ORDER BY total_spend DESC) as region_rank,
+                    LAG(total_spend) OVER (PARTITION BY customer_id ORDER BY order_date) as prev_spend
+                FROM customer_orders
+            )
+            SELECT customer_id, total_spend, spend_rank, region_rank
+            FROM metrics
+        """)
+
+        builder = GraphBuilder(dialect="spark")
+        builder.add_file(sql_file)
+        graph = builder.build()
+
+        # Should process successfully with multiple window functions
+        assert graph.metadata.total_nodes > 0
+
+        node_ids = {node.identifier for node in graph.nodes}
+        assert "customer_rankings.customer_id" in node_ids
+        assert "customer_rankings.total_spend" in node_ids
+        assert "customer_rankings.spend_rank" in node_ids
+        assert "customer_rankings.region_rank" in node_ids
+
+    def test_create_view_nested_ctes_with_window(self, tmp_path):
+        """Test CREATE VIEW with nested CTEs and window functions."""
+        sql_file = tmp_path / "query.sql"
+        sql_file.write_text("""
+            CREATE VIEW final_report AS
+            WITH base_data AS (
+                SELECT customer_id, product_id, quantity, sale_date
+                FROM raw_sales
+            ),
+            ranked_sales AS (
+                SELECT
+                    customer_id,
+                    product_id,
+                    quantity,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY customer_id, product_id
+                        ORDER BY sale_date DESC
+                    ) as sale_rank
+                FROM base_data
+            )
+            SELECT customer_id, product_id, quantity
+            FROM ranked_sales
+            WHERE sale_rank = 1
+        """)
+
+        builder = GraphBuilder(dialect="spark")
+        builder.add_file(sql_file)
+        graph = builder.build()
+
+        assert graph.metadata.total_nodes > 0
+
+        node_ids = {node.identifier for node in graph.nodes}
+        assert "final_report.customer_id" in node_ids
+        assert "final_report.product_id" in node_ids
+        assert "final_report.quantity" in node_ids
+
+        # Source should trace to raw_sales
+        assert "raw_sales.customer_id" in node_ids
+        assert "raw_sales.product_id" in node_ids
+        assert "raw_sales.quantity" in node_ids
