@@ -1086,21 +1086,23 @@ def graph_build(
         if manifest:
             builder.add_manifest(manifest, dialect=dialect)
 
-        # Process paths
+        # Process paths - collect all files first for progress tracking
         if paths:
+            all_files: list[Path] = []
             for path in paths:
                 if path.is_dir():
-                    builder.add_directory(
-                        path,
-                        recursive=recursive,
-                        glob_pattern=glob_pattern,
-                        dialect=dialect,
+                    pattern = (
+                        f"**/{glob_pattern}" if recursive else glob_pattern
+                    )
+                    all_files.extend(
+                        f for f in sorted(path.glob(pattern)) if f.is_file()
                     )
                 elif path.is_file():
-                    builder.add_file(path, dialect=dialect)
+                    all_files.append(path)
                 else:
                     err_console.print(f"[red]Error:[/red] Path not found: {path}")
                     raise typer.Exit(1)
+            builder.add_files(all_files, dialect=dialect)
 
         # Build and save graph
         graph = builder.build()

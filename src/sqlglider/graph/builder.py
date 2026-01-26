@@ -6,6 +6,7 @@ from typing import Callable, Dict, List, Optional, Set
 
 import rustworkx as rx
 from rich.console import Console
+from rich.progress import BarColumn, Progress, TaskProgressColumn, TextColumn
 
 from sqlglider.global_models import AnalysisLevel, NodeFormat
 from sqlglider.graph.models import (
@@ -166,11 +167,8 @@ class GraphBuilder:
         else:
             pattern = glob_pattern
 
-        for sql_file in sorted(dir_path.glob(pattern)):
-            if sql_file.is_file():
-                self.add_file(sql_file, dialect)
-
-        return self
+        sql_files = [f for f in sorted(dir_path.glob(pattern)) if f.is_file()]
+        return self.add_files(sql_files, dialect)
 
     def add_manifest(
         self,
@@ -194,6 +192,8 @@ class GraphBuilder:
         manifest = Manifest.from_csv(manifest_path)
         base_dir = manifest_path.parent
 
+        # Collect files with their dialects
+        files_with_dialects: List[tuple[Path, str]] = []
         for entry in manifest.entries:
             # Resolve file path relative to manifest location
             file_path = Path(entry.file_path)
@@ -202,7 +202,25 @@ class GraphBuilder:
 
             # Use entry dialect, then CLI dialect, then builder default
             entry_dialect = entry.dialect or dialect or self.dialect
-            self.add_file(file_path, entry_dialect)
+            files_with_dialects.append((file_path, entry_dialect))
+
+        # Process with progress
+        if files_with_dialects:
+            total = len(files_with_dialects)
+            with Progress(
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TaskProgressColumn(),
+                console=console,
+                transient=False,
+            ) as progress:
+                task = progress.add_task("Parsing", total=total)
+                for i, (file_path, file_dialect) in enumerate(
+                    files_with_dialects, start=1
+                ):
+                    console.print(f"Parsing file {i}/{total}: {file_path.name}")
+                    self.add_file(file_path, file_dialect)
+                    progress.advance(task)
 
         return self
 
@@ -210,6 +228,7 @@ class GraphBuilder:
         self,
         file_paths: List[Path],
         dialect: Optional[str] = None,
+        show_progress: bool = True,
     ) -> "GraphBuilder":
         """
         Add lineage from multiple SQL files.
@@ -217,12 +236,31 @@ class GraphBuilder:
         Args:
             file_paths: List of paths to SQL files
             dialect: SQL dialect (uses builder default if not specified)
+            show_progress: Whether to print progress messages
 
         Returns:
             self for method chaining
         """
-        for file_path in file_paths:
-            self.add_file(file_path, dialect)
+        if not file_paths:
+            return self
+
+        if show_progress:
+            total = len(file_paths)
+            with Progress(
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TaskProgressColumn(),
+                console=console,
+                transient=False,
+            ) as progress:
+                task = progress.add_task("Parsing", total=total)
+                for i, file_path in enumerate(file_paths, start=1):
+                    console.print(f"Parsing file {i}/{total}: {file_path.name}")
+                    self.add_file(file_path, dialect)
+                    progress.advance(task)
+        else:
+            for file_path in file_paths:
+                self.add_file(file_path, dialect)
         return self
 
     def _ensure_node(
