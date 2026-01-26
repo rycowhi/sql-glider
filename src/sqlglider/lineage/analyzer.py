@@ -1,7 +1,7 @@
 """Core lineage analysis using SQLGlot."""
 
 from enum import Enum
-from typing import Callable, Iterator, List, Optional, Set, Tuple
+from typing import Callable, Iterator, List, Optional, Set, Tuple, Union
 
 from pydantic import BaseModel, Field
 from sqlglot import exp, parse
@@ -155,7 +155,8 @@ class LineageAnalyzer:
         if target_table:
             # DML/DDL: Use target table for output column qualification
             # The columns are from the SELECT, but qualified with the target table
-            for projection in select_node.expressions:
+            projections = self._get_select_projections(select_node)
+            for projection in projections:
                 # Get the underlying expression (unwrap alias if present)
                 if isinstance(projection, exp.Alias):
                     # For aliased columns, use the alias as the column name
@@ -178,7 +179,10 @@ class LineageAnalyzer:
 
         else:
             # DQL (pure SELECT): Use the SELECT columns as output
-            for projection in select_node.expressions:
+            projections = self._get_select_projections(select_node)
+            # Get the first SELECT for table resolution (handles UNION case)
+            first_select = self._get_first_select(select_node)
+            for projection in projections:
                 # Get the underlying expression (unwrap alias if present)
                 if isinstance(projection, exp.Alias):
                     source_expr = projection.this
@@ -195,20 +199,20 @@ class LineageAnalyzer:
                     table_name = source_expr.table
                     col_name = column_name or source_expr.name
 
-                    if table_name:
+                    if table_name and first_select:
                         # Resolve table reference (could be table, CTE, or subquery alias)
                         # This works at any nesting level because we're only looking at the immediate context
                         resolved_table = self._resolve_table_reference(
-                            table_name, select_node
+                            table_name, first_select
                         )
                         qualified_name = f"{resolved_table}.{col_name}"
                         columns.append(qualified_name)
                         # Map qualified name to what lineage expects
                         self._column_mapping[qualified_name] = lineage_name or col_name
-                    else:
+                    elif first_select:
                         # No table qualifier - try to infer from FROM clause
                         # This handles "SELECT col FROM single_source" cases
-                        inferred_table = self._infer_single_table_source(select_node)
+                        inferred_table = self._infer_single_table_source(first_select)
                         if inferred_table:
                             qualified_name = f"{inferred_table}.{col_name}"
                             columns.append(qualified_name)
@@ -219,6 +223,10 @@ class LineageAnalyzer:
                             # Can't infer table, just use column name
                             columns.append(col_name)
                             self._column_mapping[col_name] = lineage_name or col_name
+                    else:
+                        # No SELECT found, just use column name
+                        columns.append(col_name)
+                        self._column_mapping[col_name] = lineage_name or col_name
                 else:
                     # For other expressions (literals, functions, etc.)
                     # Use the alias if available, otherwise the SQL representation
@@ -231,6 +239,46 @@ class LineageAnalyzer:
                         self._column_mapping[expr_str] = expr_str
 
         return columns
+
+    def _get_select_projections(self, node: exp.Expression) -> List[exp.Expression]:
+        """
+        Get the SELECT projections from a SELECT or set operation node.
+
+        For set operations (UNION, INTERSECT, EXCEPT), returns projections from
+        the first branch since all branches must have the same number of columns
+        with compatible types.
+
+        Args:
+            node: A SELECT or set operation (UNION/INTERSECT/EXCEPT) expression
+
+        Returns:
+            List of projection expressions from the SELECT clause
+        """
+        if isinstance(node, exp.Select):
+            return list(node.expressions)
+        elif isinstance(node, (exp.Union, exp.Intersect, exp.Except)):
+            # Recursively get from the left branch (could be nested set operations)
+            return self._get_select_projections(node.left)
+        return []
+
+    def _get_first_select(self, node: exp.Expression) -> Optional[exp.Select]:
+        """
+        Get the first SELECT node from a SELECT or set operation expression.
+
+        For set operations (UNION, INTERSECT, EXCEPT), returns the leftmost
+        SELECT branch.
+
+        Args:
+            node: A SELECT or set operation (UNION/INTERSECT/EXCEPT) expression
+
+        Returns:
+            The first SELECT node, or None if not found
+        """
+        if isinstance(node, exp.Select):
+            return node
+        elif isinstance(node, (exp.Union, exp.Intersect, exp.Except)):
+            return self._get_first_select(node.left)
+        return None
 
     def analyze_queries(
         self,
@@ -795,7 +843,9 @@ class LineageAnalyzer:
 
     def _get_target_and_select(
         self,
-    ) -> Optional[tuple[Optional[str], exp.Select]]:
+    ) -> Optional[
+        tuple[Optional[str], Union[exp.Select, exp.Union, exp.Intersect, exp.Except]]
+    ]:
         """
         Detect if this is a DML/DDL statement and extract the target table and SELECT node.
 
@@ -817,9 +867,11 @@ class LineageAnalyzer:
             target = self.expr.this
             if isinstance(target, exp.Table):
                 target_name = self._get_qualified_table_name(target)
-                # Find the SELECT within the INSERT
+                # Find the SELECT within the INSERT (may be a set operation)
                 select_node = self.expr.expression
-                if isinstance(select_node, exp.Select):
+                if isinstance(
+                    select_node, (exp.Select, exp.Union, exp.Intersect, exp.Except)
+                ):
                     return (target_name, select_node)
 
         # Check for CREATE TABLE AS SELECT (CTAS) or CREATE VIEW AS SELECT
@@ -831,9 +883,11 @@ class LineageAnalyzer:
                     target = target.this
                 if isinstance(target, exp.Table):
                     target_name = self._get_qualified_table_name(target)
-                    # Find the SELECT in the expression
+                    # Find the SELECT in the expression (may be a set operation)
                     select_node = self.expr.expression
-                    if isinstance(select_node, exp.Select):
+                    if isinstance(
+                        select_node, (exp.Select, exp.Union, exp.Intersect, exp.Except)
+                    ):
                         return (target_name, select_node)
 
         # Check for MERGE statement

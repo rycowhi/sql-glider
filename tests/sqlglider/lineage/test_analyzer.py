@@ -2073,3 +2073,192 @@ class TestLiteralHandling:
         # Should have both the column and the literal
         assert any("active_customers" in s for s in sources)
         assert any("<literal: 'inactive'>" in s for s in sources)
+
+
+class TestInsertWithUnion:
+    """Tests for INSERT statements containing UNION queries."""
+
+    def test_insert_union_qualifies_output_with_target_table(self):
+        """Output columns should be qualified with the INSERT target table."""
+        sql = """
+        INSERT INTO db.output_table
+        SELECT id, name FROM db.table_a
+        UNION
+        SELECT id, name FROM db.table_b
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
+
+        assert len(results) == 1
+        output_names = {item.output_name for item in results[0].lineage_items}
+        assert "db.output_table.id" in output_names
+        assert "db.output_table.name" in output_names
+
+    def test_insert_union_with_computed_column(self):
+        """Computed columns in UNION should be qualified with target table."""
+        sql = """
+        INSERT INTO db.output
+        SELECT CONCAT(a, b) AS combined FROM db.source
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
+
+        output_names = {item.output_name for item in results[0].lineage_items}
+        assert "db.output.combined" in output_names
+
+    def test_insert_union_all_with_aliases(self):
+        """UNION ALL with aliased columns should qualify with target table."""
+        sql = """
+        INSERT OVERWRITE TABLE db.output_table_1
+        SELECT DISTINCT
+            a.id,
+            a.update_date,
+            trim(concat(coalesce(a.address_one, ""), " ", coalesce(a.address_two, ""))) AS full_address
+        FROM db.input_a AS a
+        UNION
+        SELECT DISTINCT
+            b.id,
+            b.update_date,
+            trim(concat(coalesce(b.address_part_a, ""), " ", coalesce(b.address_part_b, ""))) AS full_address
+        FROM db.input_b AS b
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
+
+        assert len(results) == 1
+        output_names = {item.output_name for item in results[0].lineage_items}
+        # All output columns should be qualified with the target table
+        assert "db.output_table_1.id" in output_names
+        assert "db.output_table_1.update_date" in output_names
+        assert "db.output_table_1.full_address" in output_names
+
+    def test_create_table_as_union_qualifies_output(self):
+        """CREATE TABLE AS SELECT with UNION should qualify output columns."""
+        sql = """
+        CREATE TABLE db.new_table AS
+        SELECT id, name FROM db.table_a
+        UNION ALL
+        SELECT id, name FROM db.table_b
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
+
+        assert len(results) == 1
+        output_names = {item.output_name for item in results[0].lineage_items}
+        assert "db.new_table.id" in output_names
+        assert "db.new_table.name" in output_names
+
+    def test_multi_query_insert_union_cross_reference(self):
+        """Test that multi-query files with INSERT UNION work correctly.
+
+        This tests the full scenario where:
+        1. First query: INSERT with UNION creates qualified output columns
+        2. Second query: References the first query's output table
+        """
+        sql = """
+        INSERT OVERWRITE TABLE db.output_table_1
+        SELECT
+            a.id,
+            trim(concat(coalesce(a.address_one, ""), " ", coalesce(a.address_two, ""))) AS full_address
+        FROM db.input_a AS a
+        UNION
+        SELECT
+            b.id,
+            trim(concat(coalesce(b.address_part_a, ""), " ", coalesce(b.address_part_b, ""))) AS full_address
+        FROM db.input_b AS b;
+
+        INSERT OVERWRITE TABLE db.output_table_2
+        SELECT
+            o.id,
+            o.full_address AS address
+        FROM db.output_table_1 AS o;
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
+
+        # Should have 2 query results
+        assert len(results) == 2
+
+        # First query outputs should be qualified with db.output_table_1
+        query1_outputs = {item.output_name for item in results[0].lineage_items}
+        assert "db.output_table_1.id" in query1_outputs
+        assert "db.output_table_1.full_address" in query1_outputs
+
+        # Second query outputs should be qualified with db.output_table_2
+        query2_outputs = {item.output_name for item in results[1].lineage_items}
+        assert "db.output_table_2.id" in query2_outputs
+        assert "db.output_table_2.address" in query2_outputs
+
+        # Second query sources should reference db.output_table_1
+        query2_sources = {item.source_name for item in results[1].lineage_items}
+        assert "db.output_table_1.id" in query2_sources
+        assert "db.output_table_1.full_address" in query2_sources
+
+
+class TestInsertWithIntersectExcept:
+    """Tests for INSERT statements containing INTERSECT/EXCEPT queries."""
+
+    def test_insert_intersect_qualifies_output_with_target_table(self):
+        """Output columns should be qualified with the INSERT target table for INTERSECT."""
+        sql = """
+        INSERT INTO db.common_records
+        SELECT id, name FROM db.table_a
+        INTERSECT
+        SELECT id, name FROM db.table_b
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
+
+        assert len(results) == 1
+        output_names = {item.output_name for item in results[0].lineage_items}
+        assert "db.common_records.id" in output_names
+        assert "db.common_records.name" in output_names
+
+    def test_insert_except_qualifies_output_with_target_table(self):
+        """Output columns should be qualified with the INSERT target table for EXCEPT."""
+        sql = """
+        INSERT INTO db.unique_records
+        SELECT id, name FROM db.table_a
+        EXCEPT
+        SELECT id, name FROM db.table_b
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
+
+        assert len(results) == 1
+        output_names = {item.output_name for item in results[0].lineage_items}
+        assert "db.unique_records.id" in output_names
+        assert "db.unique_records.name" in output_names
+
+    def test_create_table_as_intersect(self):
+        """CREATE TABLE AS INTERSECT should qualify output columns."""
+        sql = """
+        CREATE TABLE db.intersection AS
+        SELECT id, status FROM db.active_users
+        INTERSECT
+        SELECT id, status FROM db.premium_users
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
+
+        assert len(results) == 1
+        output_names = {item.output_name for item in results[0].lineage_items}
+        assert "db.intersection.id" in output_names
+        assert "db.intersection.status" in output_names
+
+    def test_nested_set_operations(self):
+        """Nested set operations (UNION + INTERSECT) should work correctly."""
+        sql = """
+        INSERT INTO db.result
+        SELECT id FROM db.table_a
+        UNION
+        SELECT id FROM db.table_b
+        INTERSECT
+        SELECT id FROM db.table_c
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
+
+        assert len(results) == 1
+        output_names = {item.output_name for item in results[0].lineage_items}
+        assert "db.result.id" in output_names

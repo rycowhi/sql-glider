@@ -322,3 +322,109 @@ class TestGraphBuilderEdgeCases:
         assert isinstance(skipped, list)
         # File is processed but queries within are skipped - file not in skipped_files
         assert len(skipped) == 0
+
+
+class TestGraphBuilderInsertWithUnion:
+    """Tests for INSERT statements containing UNION queries in graph building."""
+
+    def test_insert_union_creates_qualified_nodes(self, tmp_path):
+        """INSERT with UNION should create nodes qualified with target table."""
+        sql_file = tmp_path / "query.sql"
+        sql_file.write_text("""
+            INSERT INTO db.output
+            SELECT id, name FROM db.table_a
+            UNION
+            SELECT id, name FROM db.table_b
+        """)
+
+        builder = GraphBuilder(dialect="spark")
+        builder.add_file(sql_file)
+        graph = builder.build()
+
+        # Check nodes are properly qualified with target table
+        node_ids = {node.identifier for node in graph.nodes}
+        assert "db.output.id" in node_ids
+        assert "db.output.name" in node_ids
+        # Source nodes should also exist
+        assert "db.table_a.id" in node_ids
+        assert "db.table_b.id" in node_ids
+
+    def test_cross_query_lineage_with_union(self, tmp_path):
+        """Test that lineage chains work across queries with INSERT UNION.
+
+        This is the key test for the bug fix - lineage should flow from
+        input tables through the intermediate table to the final output.
+        """
+        from sqlglider.graph.query import GraphQuerier
+
+        sql_file = tmp_path / "query.sql"
+        sql_file.write_text("""
+            INSERT OVERWRITE TABLE db.output_table_1
+            SELECT DISTINCT
+                a.id,
+                trim(concat(coalesce(a.address_one, ""), " ", coalesce(a.address_two, ""))) AS full_address
+            FROM db.input_a AS a
+            UNION
+            SELECT DISTINCT
+                b.id,
+                trim(concat(coalesce(b.address_part_a, ""), " ", coalesce(b.address_part_b, ""))) AS full_address
+            FROM db.input_b AS b;
+
+            INSERT OVERWRITE TABLE db.output_table_2
+            SELECT
+                o.id,
+                o.full_address AS address
+            FROM db.output_table_1 AS o;
+        """)
+
+        builder = GraphBuilder(dialect="spark")
+        builder.add_file(sql_file)
+        graph = builder.build()
+
+        # Verify intermediate nodes exist and are qualified
+        node_ids = {node.identifier for node in graph.nodes}
+        assert "db.output_table_1.full_address" in node_ids
+        assert "db.output_table_2.address" in node_ids
+
+        # Query downstream from input
+        querier = GraphQuerier(graph)
+        downstream = querier.find_downstream("db.input_a.address_one")
+
+        # Should include both intermediate and final output
+        downstream_ids = {n.identifier for n in downstream.related_columns}
+        assert "db.output_table_1.full_address" in downstream_ids
+        assert "db.output_table_2.address" in downstream_ids
+
+    def test_upstream_query_through_union(self, tmp_path):
+        """Test upstream query flows through INSERT UNION to source tables."""
+        from sqlglider.graph.query import GraphQuerier
+
+        sql_file = tmp_path / "query.sql"
+        sql_file.write_text("""
+            INSERT INTO db.intermediate
+            SELECT CONCAT(a.first, a.last) AS full_name
+            FROM db.source_a AS a
+            UNION
+            SELECT CONCAT(b.first, b.last) AS full_name
+            FROM db.source_b AS b;
+
+            INSERT INTO db.final
+            SELECT full_name AS name FROM db.intermediate;
+        """)
+
+        builder = GraphBuilder(dialect="spark")
+        builder.add_file(sql_file)
+        graph = builder.build()
+
+        # Query upstream from final output
+        querier = GraphQuerier(graph)
+        upstream = querier.find_upstream("db.final.name")
+
+        upstream_ids = {n.identifier for n in upstream.related_columns}
+
+        # Should include intermediate and original sources from both UNION branches
+        assert "db.intermediate.full_name" in upstream_ids
+        assert "db.source_a.first" in upstream_ids
+        assert "db.source_a.last" in upstream_ids
+        assert "db.source_b.first" in upstream_ids
+        assert "db.source_b.last" in upstream_ids
