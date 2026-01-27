@@ -2549,3 +2549,139 @@ class TestCrossStatementLineage:
         assert "output_table.b" in third_outputs
         assert "output_table.c" in third_outputs
         assert "output_table.row_num" in third_outputs
+
+    def test_select_star_from_join(self):
+        """SELECT * from JOIN should include columns from all joined tables."""
+        sql = """
+        CREATE VIEW v1 AS SELECT a, b FROM t1;
+        CREATE VIEW v2 AS SELECT c, d FROM t2;
+        CREATE VIEW v3 AS SELECT * FROM v1 JOIN v2 ON v1.a = v2.c;
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
+
+        assert len(results) == 3
+
+        # Third view should have all columns from both v1 and v2
+        third_result = results[2]
+        third_outputs = {item.output_name for item in third_result.lineage_items}
+        assert "v3.a" in third_outputs
+        assert "v3.b" in third_outputs
+        assert "v3.c" in third_outputs
+        assert "v3.d" in third_outputs
+
+        # Sources should be from both v1 and v2
+        third_sources = {item.source_name for item in third_result.lineage_items}
+        assert "v1.a" in third_sources
+        assert "v1.b" in third_sources
+        assert "v2.c" in third_sources
+        assert "v2.d" in third_sources
+
+    def test_nested_ctes_and_views_with_select_star(self):
+        """Complex nested CTEs and views with SELECT * should resolve correctly."""
+        sql = """
+        CREATE VIEW v1 AS SELECT a, b FROM t1;
+        CREATE VIEW v2 AS SELECT c, d FROM t2;
+        CREATE VIEW v3 AS
+        WITH cte1 AS (SELECT * FROM v1)
+        SELECT * FROM cte1;
+        CREATE VIEW v4 AS
+        SELECT * FROM v3 JOIN v2 ON v3.a = v2.c;
+        CREATE VIEW v5 AS
+        WITH
+            cte1 AS (SELECT * FROM v4),
+            cte2 AS (SELECT * FROM cte1)
+        SELECT * FROM cte2;
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
+
+        assert len(results) == 5
+
+        # Verify file schema was correctly built
+        assert "v1" in analyzer._file_schema
+        assert set(analyzer._file_schema["v1"].keys()) == {"a", "b"}
+
+        assert "v2" in analyzer._file_schema
+        assert set(analyzer._file_schema["v2"].keys()) == {"c", "d"}
+
+        assert "v3" in analyzer._file_schema
+        assert set(analyzer._file_schema["v3"].keys()) == {"a", "b"}
+
+        assert "v4" in analyzer._file_schema
+        assert set(analyzer._file_schema["v4"].keys()) == {"a", "b", "c", "d"}
+
+        assert "v5" in analyzer._file_schema
+        assert set(analyzer._file_schema["v5"].keys()) == {"a", "b", "c", "d"}
+
+        # Final view should have all columns
+        fifth_result = results[4]
+        fifth_outputs = {item.output_name for item in fifth_result.lineage_items}
+        assert "v5.a" in fifth_outputs
+        assert "v5.b" in fifth_outputs
+        assert "v5.c" in fifth_outputs
+        assert "v5.d" in fifth_outputs
+
+    def test_select_star_from_subquery(self):
+        """SELECT * from subquery should resolve columns from inner SELECT."""
+        sql = """
+        CREATE VIEW v1 AS SELECT a, b FROM t1;
+        CREATE VIEW v2 AS SELECT * FROM (SELECT * FROM v1) sub;
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
+
+        assert len(results) == 2
+
+        # Second view should have columns from subquery
+        second_result = results[1]
+        second_outputs = {item.output_name for item in second_result.lineage_items}
+        assert "v2.a" in second_outputs
+        assert "v2.b" in second_outputs
+
+        # File schema should also be correct
+        assert set(analyzer._file_schema["v2"].keys()) == {"a", "b"}
+
+    def test_table_qualified_star(self):
+        """Table-qualified star (t.*) should resolve to table columns."""
+        sql = """
+        CREATE VIEW v1 AS SELECT a, b FROM t1;
+        CREATE VIEW v2 AS SELECT c FROM t2;
+        CREATE VIEW v3 AS SELECT v1.*, v2.c FROM v1 JOIN v2 ON v1.a = v2.c;
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
+
+        assert len(results) == 3
+
+        # Third view should have all columns
+        third_result = results[2]
+        third_outputs = {item.output_name for item in third_result.lineage_items}
+        assert "v3.a" in third_outputs
+        assert "v3.b" in third_outputs
+        assert "v3.c" in third_outputs
+
+        # File schema should be correct
+        assert set(analyzer._file_schema["v3"].keys()) == {"a", "b", "c"}
+
+    def test_table_qualified_star_with_alias(self):
+        """Table-qualified star with alias (x.*) should resolve correctly."""
+        sql = """
+        CREATE VIEW v1 AS SELECT a, b FROM t1;
+        CREATE VIEW v2 AS SELECT c FROM t2;
+        CREATE VIEW v3 AS SELECT x.*, y.c FROM v1 AS x JOIN v2 AS y ON x.a = y.c;
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
+
+        assert len(results) == 3
+
+        # Third view should have all columns
+        third_result = results[2]
+        third_outputs = {item.output_name for item in third_result.lineage_items}
+        assert "v3.a" in third_outputs
+        assert "v3.b" in third_outputs
+        assert "v3.c" in third_outputs
+
+        # File schema should be correct
+        assert set(analyzer._file_schema["v3"].keys()) == {"a", "b", "c"}

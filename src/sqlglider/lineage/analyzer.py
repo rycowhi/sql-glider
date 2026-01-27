@@ -182,20 +182,42 @@ class LineageAnalyzer:
                     # For aliased columns, use the alias as the column name
                     column_name = projection.alias
                     lineage_name = column_name  # SQLGlot lineage uses the alias
-                else:
-                    source_expr = projection
-                    if isinstance(source_expr, exp.Column):
-                        column_name = source_expr.name
-                        lineage_name = column_name
+                    # Qualify with target table
+                    qualified_name = f"{target_table}.{column_name}"
+                    columns.append(qualified_name)
+                    self._column_mapping[qualified_name] = lineage_name
+                elif isinstance(projection, exp.Column):
+                    # Check if this is a table-qualified star (e.g., t.*)
+                    if isinstance(projection.this, exp.Star):
+                        source_table = projection.table
+                        if source_table and first_select:
+                            qualified_star_cols = self._resolve_qualified_star(
+                                source_table, first_select
+                            )
+                            for col in qualified_star_cols:
+                                qualified_name = f"{target_table}.{col}"
+                                columns.append(qualified_name)
+                                self._column_mapping[qualified_name] = col
+                        if not qualified_star_cols:
+                            # Fallback: can't resolve t.*, use * as column name
+                            qualified_name = f"{target_table}.*"
+                            columns.append(qualified_name)
+                            self._column_mapping[qualified_name] = "*"
                     else:
-                        # For expressions, use the SQL representation
-                        column_name = source_expr.sql(dialect=self.dialect)
+                        column_name = projection.name
                         lineage_name = column_name
-
-                # Qualify with target table
-                qualified_name = f"{target_table}.{column_name}"
-                columns.append(qualified_name)
-                self._column_mapping[qualified_name] = lineage_name
+                        # Qualify with target table
+                        qualified_name = f"{target_table}.{column_name}"
+                        columns.append(qualified_name)
+                        self._column_mapping[qualified_name] = lineage_name
+                else:
+                    # For expressions, use the SQL representation
+                    column_name = projection.sql(dialect=self.dialect)
+                    lineage_name = column_name
+                    # Qualify with target table
+                    qualified_name = f"{target_table}.{column_name}"
+                    columns.append(qualified_name)
+                    self._column_mapping[qualified_name] = lineage_name
 
         else:
             # DQL (pure SELECT): Use the SELECT columns as output
@@ -1342,8 +1364,18 @@ class LineageAnalyzer:
                 # Use the alias name as the column name
                 columns.append(projection.alias)
             elif isinstance(projection, exp.Column):
-                # Use the column name
-                columns.append(projection.name)
+                # Check if this is a table-qualified star (e.g., t.*)
+                if isinstance(projection.this, exp.Star):
+                    # Resolve table-qualified star from known schema
+                    table_name = projection.table
+                    if table_name and first_select:
+                        qualified_star_cols = self._resolve_qualified_star(
+                            table_name, first_select
+                        )
+                        columns.extend(qualified_star_cols)
+                else:
+                    # Use the column name
+                    columns.append(projection.name)
             elif isinstance(projection, exp.Star):
                 # Resolve SELECT * from known schema
                 if first_select:
@@ -1375,6 +1407,36 @@ class LineageAnalyzer:
 
         source = from_clause.this
 
+        # Handle table reference from FROM clause
+        columns.extend(self._resolve_source_columns(source, select_node))
+
+        # Handle JOIN clauses - collect columns from all joined tables
+        joins = select_node.args.get("joins")
+        if joins:
+            for join in joins:
+                if isinstance(join, exp.Join):
+                    join_source = join.this
+                    columns.extend(
+                        self._resolve_source_columns(join_source, select_node)
+                    )
+
+        return columns
+
+    def _resolve_source_columns(
+        self, source: exp.Expression, select_node: exp.Select
+    ) -> List[str]:
+        """
+        Resolve columns from a single source (table, subquery, etc.).
+
+        Args:
+            source: The source expression (Table, Subquery, etc.)
+            select_node: The containing SELECT node for CTE resolution
+
+        Returns:
+            List of column names from the source
+        """
+        columns: List[str] = []
+
         # Handle table reference
         if isinstance(source, exp.Table):
             source_name = self._get_qualified_table_name(source)
@@ -1387,11 +1449,100 @@ class LineageAnalyzer:
                 cte_columns = self._resolve_cte_columns(source_name, select_node)
                 columns.extend(cte_columns)
 
-        # Handle subquery - can't resolve without deeper analysis
-        elif isinstance(source, exp.Subquery) and source.alias:
-            # Check if this subquery alias is in file schema (unlikely)
-            if source.alias in self._file_schema:
+        # Handle subquery with alias
+        elif isinstance(source, exp.Subquery):
+            # First check if this subquery alias is in file schema
+            if source.alias and source.alias in self._file_schema:
                 columns.extend(self._file_schema[source.alias].keys())
+            else:
+                # Extract columns from the subquery's SELECT
+                inner_select = source.this
+                if isinstance(inner_select, exp.Select):
+                    subquery_cols = self._extract_subquery_columns(inner_select)
+                    columns.extend(subquery_cols)
+
+        return columns
+
+    def _resolve_qualified_star(
+        self, table_name: str, select_node: exp.Select
+    ) -> List[str]:
+        """
+        Resolve a table-qualified star (e.g., t.*) to actual column names.
+
+        Args:
+            table_name: The table/alias name qualifying the star
+            select_node: The SELECT node for context
+
+        Returns:
+            List of column names from the specified table
+        """
+        # First check file schema
+        if table_name in self._file_schema:
+            return list(self._file_schema[table_name].keys())
+
+        # Check if it's a CTE reference
+        cte_columns = self._resolve_cte_columns(table_name, select_node)
+        if cte_columns:
+            return cte_columns
+
+        # Check if the table name is an alias - need to resolve the actual table
+        from_clause = select_node.args.get("from")
+        if from_clause and isinstance(from_clause, exp.From):
+            source = from_clause.this
+            if isinstance(source, exp.Table) and source.alias == table_name:
+                actual_name = self._get_qualified_table_name(source)
+                if actual_name in self._file_schema:
+                    return list(self._file_schema[actual_name].keys())
+
+            # Check JOIN clauses for aliased tables
+            joins = select_node.args.get("joins")
+            if joins:
+                for join in joins:
+                    if isinstance(join, exp.Join):
+                        join_source = join.this
+                        if (
+                            isinstance(join_source, exp.Table)
+                            and join_source.alias == table_name
+                        ):
+                            actual_name = self._get_qualified_table_name(join_source)
+                            if actual_name in self._file_schema:
+                                return list(self._file_schema[actual_name].keys())
+
+        return []
+
+    def _extract_subquery_columns(self, subquery_select: exp.Select) -> List[str]:
+        """
+        Extract column names from a subquery's SELECT statement.
+
+        Args:
+            subquery_select: The SELECT expression within the subquery
+
+        Returns:
+            List of column names
+        """
+        columns: List[str] = []
+
+        for projection in subquery_select.expressions:
+            if isinstance(projection, exp.Alias):
+                columns.append(projection.alias)
+            elif isinstance(projection, exp.Column):
+                # Check for table-qualified star (t.*)
+                if isinstance(projection.this, exp.Star):
+                    table_name = projection.table
+                    if table_name:
+                        qualified_cols = self._resolve_qualified_star(
+                            table_name, subquery_select
+                        )
+                        columns.extend(qualified_cols)
+                else:
+                    columns.append(projection.name)
+            elif isinstance(projection, exp.Star):
+                # Resolve SELECT * in subquery
+                star_columns = self._resolve_star_columns(subquery_select)
+                columns.extend(star_columns)
+            else:
+                col_sql = projection.sql(dialect=self.dialect)
+                columns.append(col_sql)
 
         return columns
 
