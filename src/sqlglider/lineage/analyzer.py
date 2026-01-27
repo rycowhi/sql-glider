@@ -190,6 +190,7 @@ class LineageAnalyzer:
                     # Check if this is a table-qualified star (e.g., t.*)
                     if isinstance(projection.this, exp.Star):
                         source_table = projection.table
+                        qualified_star_cols: List[str] = []
                         if source_table and first_select:
                             qualified_star_cols = self._resolve_qualified_star(
                                 source_table, first_select
