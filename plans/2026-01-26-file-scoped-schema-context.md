@@ -92,10 +92,10 @@ node = lineage(
 | CTE referencing earlier CTE | Recursive CTE column resolution |
 | `SELECT *, extra_col` | Combines * expansion with extra columns |
 | Table-qualified `t.*` | Handles `v1.*` style syntax |
-
-### Known Limitation
-
-LATERAL VIEW with `explode()` doesn't capture generated column names. This is a complex Spark-specific feature that would require special handling of the LATERAL VIEW clause.
+| LATERAL VIEW explode | Collects generated columns from `laterals` clause |
+| LATERAL VIEW posexplode | Collects both position and element columns |
+| Multiple LATERAL VIEWs | Collects columns from all LATERAL VIEWs |
+| LATERAL VIEW OUTER | Same handling as regular LATERAL VIEW |
 
 ---
 
@@ -103,8 +103,8 @@ LATERAL VIEW with `explode()` doesn't capture generated column names. This is a 
 
 | File | Changes |
 |------|---------|
-| `src/sqlglider/lineage/analyzer.py` | Added `_file_schema` instance variable; Added 8 schema extraction methods; Modified `analyze_queries()` and `_analyze_column_lineage_internal()` and `get_output_columns()` |
-| `tests/sqlglider/lineage/test_analyzer.py` | Added `TestFileSchemaExtraction` (9 tests) and `TestCrossStatementLineage` (12 tests) |
+| `src/sqlglider/lineage/analyzer.py` | Added `_file_schema` instance variable; Added 9 schema extraction methods (including `_resolve_lateral_columns`); Modified `analyze_queries()` and `_analyze_column_lineage_internal()` and `get_output_columns()` |
+| `tests/sqlglider/lineage/test_analyzer.py` | Added `TestFileSchemaExtraction` (9 tests), `TestCrossStatementLineage` (12 tests), and `TestLateralViewColumnResolution` (5 tests) |
 
 ---
 
@@ -136,6 +136,13 @@ LATERAL VIEW with `explode()` doesn't capture generated column names. This is a 
 - `test_select_star_from_subquery`
 - `test_table_qualified_star`
 - `test_table_qualified_star_with_alias`
+
+**TestLateralViewColumnResolution (5 tests):**
+- `test_select_star_with_lateral_view_explode`
+- `test_select_star_with_lateral_view_posexplode`
+- `test_select_star_with_multiple_lateral_views`
+- `test_select_star_with_lateral_view_outer`
+- `test_lateral_view_with_join`
 
 ### Verification Commands
 

@@ -1420,7 +1420,29 @@ class LineageAnalyzer:
                         self._resolve_source_columns(join_source, select_node)
                     )
 
+        # Handle LATERAL VIEW clauses - collect generated columns
+        laterals = select_node.args.get("laterals")
+        if laterals:
+            for lateral in laterals:
+                if isinstance(lateral, exp.Lateral):
+                    lateral_cols = self._resolve_lateral_columns(lateral)
+                    columns.extend(lateral_cols)
+
         return columns
+
+    def _resolve_lateral_columns(self, lateral: exp.Lateral) -> List[str]:
+        """
+        Extract generated column names from a LATERAL VIEW clause.
+
+        Args:
+            lateral: The Lateral expression node
+
+        Returns:
+            List of generated column names (e.g., ['elem'] for explode,
+            ['pos', 'elem'] for posexplode)
+        """
+        # Use SQLGlot's built-in property to get alias column names
+        return lateral.alias_column_names or []
 
     def _resolve_source_columns(
         self, source: exp.Expression, select_node: exp.Select

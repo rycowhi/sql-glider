@@ -2685,3 +2685,84 @@ class TestCrossStatementLineage:
 
         # File schema should be correct
         assert set(analyzer._file_schema["v3"].keys()) == {"a", "b", "c"}
+
+
+class TestLateralViewColumnResolution:
+    """Tests for LATERAL VIEW column resolution in SELECT *."""
+
+    def test_select_star_with_lateral_view_explode(self):
+        """SELECT * should include explode-generated columns."""
+        sql = """
+        CREATE VIEW v1 AS SELECT arr FROM t1;
+        CREATE VIEW v2 AS SELECT * FROM v1 LATERAL VIEW explode(arr) t AS elem;
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
+
+        # v2 schema should include both arr and elem
+        assert "v2" in analyzer._file_schema
+        assert set(analyzer._file_schema["v2"].keys()) == {"arr", "elem"}
+
+    def test_select_star_with_lateral_view_posexplode(self):
+        """SELECT * should include posexplode-generated columns (pos + elem)."""
+        sql = """
+        CREATE VIEW v1 AS SELECT arr FROM t1;
+        CREATE VIEW v2 AS SELECT * FROM v1 LATERAL VIEW posexplode(arr) t AS pos, elem;
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
+
+        # v2 schema should include arr, pos, and elem
+        assert "v2" in analyzer._file_schema
+        assert set(analyzer._file_schema["v2"].keys()) == {"arr", "pos", "elem"}
+
+    def test_select_star_with_multiple_lateral_views(self):
+        """SELECT * should include columns from multiple LATERAL VIEWs."""
+        sql = """
+        CREATE VIEW v1 AS SELECT arr1, arr2 FROM t1;
+        CREATE VIEW v2 AS
+        SELECT * FROM v1
+        LATERAL VIEW explode(arr1) t1 AS elem1
+        LATERAL VIEW explode(arr2) t2 AS elem2;
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
+
+        # v2 schema should include all columns
+        assert "v2" in analyzer._file_schema
+        assert set(analyzer._file_schema["v2"].keys()) == {
+            "arr1",
+            "arr2",
+            "elem1",
+            "elem2",
+        }
+
+    def test_select_star_with_lateral_view_outer(self):
+        """LATERAL VIEW OUTER should work the same as regular LATERAL VIEW."""
+        sql = """
+        CREATE VIEW v1 AS SELECT arr FROM t1;
+        CREATE VIEW v2 AS SELECT * FROM v1 LATERAL VIEW OUTER explode(arr) t AS elem;
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
+
+        # v2 schema should include both arr and elem
+        assert "v2" in analyzer._file_schema
+        assert set(analyzer._file_schema["v2"].keys()) == {"arr", "elem"}
+
+    def test_lateral_view_with_join(self):
+        """LATERAL VIEW combined with JOIN should resolve all columns."""
+        sql = """
+        CREATE VIEW v1 AS SELECT id, arr FROM t1;
+        CREATE VIEW v2 AS SELECT name FROM t2;
+        CREATE VIEW v3 AS
+        SELECT * FROM v1
+        JOIN v2 ON v1.id = v2.name
+        LATERAL VIEW explode(arr) t AS elem;
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
+
+        # v3 schema should include columns from v1, v2, and the lateral view
+        assert "v3" in analyzer._file_schema
+        assert set(analyzer._file_schema["v3"].keys()) == {"id", "arr", "name", "elem"}
