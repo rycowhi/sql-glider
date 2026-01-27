@@ -2766,3 +2766,57 @@ class TestLateralViewColumnResolution:
         # v3 schema should include columns from v1, v2, and the lateral view
         assert "v3" in analyzer._file_schema
         assert set(analyzer._file_schema["v3"].keys()) == {"id", "arr", "name", "elem"}
+
+
+class TestSemiAntiJoinColumnResolution:
+    """Tests for SEMI and ANTI JOIN column resolution in SELECT *."""
+
+    def test_left_semi_join_only_returns_left_columns(self):
+        """LEFT SEMI JOIN should only include columns from the left table."""
+        sql = """
+        CREATE VIEW v1 AS SELECT a, b FROM t1;
+        CREATE VIEW v2 AS SELECT c FROM t2;
+        CREATE VIEW v3 AS SELECT * FROM v1 LEFT SEMI JOIN v2 ON v1.a = v2.c;
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
+
+        # v3 schema should only include columns from v1 (a, b), not v2 (c)
+        assert "v3" in analyzer._file_schema
+        assert set(analyzer._file_schema["v3"].keys()) == {"a", "b"}
+
+    def test_left_anti_join_only_returns_left_columns(self):
+        """LEFT ANTI JOIN should only include columns from the left table."""
+        sql = """
+        CREATE VIEW v1 AS SELECT a, b FROM t1;
+        CREATE VIEW v2 AS SELECT c FROM t2;
+        CREATE VIEW v3 AS SELECT * FROM v1 LEFT ANTI JOIN v2 ON v1.a = v2.c;
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
+
+        # v3 schema should only include columns from v1 (a, b), not v2 (c)
+        assert "v3" in analyzer._file_schema
+        assert set(analyzer._file_schema["v3"].keys()) == {"a", "b"}
+
+    def test_semi_join_vs_inner_join(self):
+        """SEMI JOIN should behave differently from INNER JOIN for SELECT *."""
+        # INNER JOIN returns columns from both tables
+        sql_inner = """
+        CREATE VIEW v1 AS SELECT a FROM t1;
+        CREATE VIEW v2 AS SELECT b FROM t2;
+        CREATE VIEW v3 AS SELECT * FROM v1 JOIN v2 ON v1.a = v2.b;
+        """
+        analyzer_inner = LineageAnalyzer(sql_inner, dialect="spark")
+        analyzer_inner.analyze_queries(level=AnalysisLevel.COLUMN)
+        assert set(analyzer_inner._file_schema["v3"].keys()) == {"a", "b"}
+
+        # SEMI JOIN returns only left table columns
+        sql_semi = """
+        CREATE VIEW v1 AS SELECT a FROM t1;
+        CREATE VIEW v2 AS SELECT b FROM t2;
+        CREATE VIEW v3 AS SELECT * FROM v1 LEFT SEMI JOIN v2 ON v1.a = v2.b;
+        """
+        analyzer_semi = LineageAnalyzer(sql_semi, dialect="spark")
+        analyzer_semi.analyze_queries(level=AnalysisLevel.COLUMN)
+        assert set(analyzer_semi._file_schema["v3"].keys()) == {"a"}

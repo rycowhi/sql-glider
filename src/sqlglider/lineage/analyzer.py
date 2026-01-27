@@ -1412,10 +1412,16 @@ class LineageAnalyzer:
         columns.extend(self._resolve_source_columns(source, select_node))
 
         # Handle JOIN clauses - collect columns from all joined tables
+        # EXCEPT for SEMI and ANTI joins which only return left table columns
         joins = select_node.args.get("joins")
         if joins:
             for join in joins:
                 if isinstance(join, exp.Join):
+                    # SEMI and ANTI joins don't include right table columns in SELECT *
+                    join_kind = join.kind
+                    if join_kind in ("SEMI", "ANTI"):
+                        # Skip right table columns for SEMI/ANTI joins
+                        continue
                     join_source = join.this
                     columns.extend(
                         self._resolve_source_columns(join_source, select_node)

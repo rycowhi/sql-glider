@@ -96,6 +96,8 @@ node = lineage(
 | LATERAL VIEW posexplode | Collects both position and element columns |
 | Multiple LATERAL VIEWs | Collects columns from all LATERAL VIEWs |
 | LATERAL VIEW OUTER | Same handling as regular LATERAL VIEW |
+| LEFT SEMI JOIN | Only includes left table columns (right table excluded) |
+| LEFT ANTI JOIN | Only includes left table columns (right table excluded) |
 
 ---
 
@@ -103,8 +105,8 @@ node = lineage(
 
 | File | Changes |
 |------|---------|
-| `src/sqlglider/lineage/analyzer.py` | Added `_file_schema` instance variable; Added 9 schema extraction methods (including `_resolve_lateral_columns`); Modified `analyze_queries()` and `_analyze_column_lineage_internal()` and `get_output_columns()` |
-| `tests/sqlglider/lineage/test_analyzer.py` | Added `TestFileSchemaExtraction` (9 tests), `TestCrossStatementLineage` (12 tests), and `TestLateralViewColumnResolution` (5 tests) |
+| `src/sqlglider/lineage/analyzer.py` | Added `_file_schema` instance variable; Added 9 schema extraction methods (including `_resolve_lateral_columns`); Modified `analyze_queries()` and `_analyze_column_lineage_internal()` and `get_output_columns()`; Added SEMI/ANTI join handling in `_resolve_star_columns()` |
+| `tests/sqlglider/lineage/test_analyzer.py` | Added `TestFileSchemaExtraction` (9 tests), `TestCrossStatementLineage` (12 tests), `TestLateralViewColumnResolution` (5 tests), and `TestSemiAntiJoinColumnResolution` (3 tests) |
 
 ---
 
