@@ -615,6 +615,12 @@ class LineageAnalyzer:
             if isinstance(target, exp.Table):
                 return (self._get_qualified_table_name(target), ObjectType.UNKNOWN)
 
+        # CACHE TABLE
+        elif isinstance(self.expr, exp.Cache):
+            target = self.expr.this
+            if isinstance(target, exp.Table):
+                return (self._get_qualified_table_name(target), ObjectType.TABLE)
+
         # DELETE FROM table
         elif isinstance(self.expr, exp.Delete):
             target = self.expr.this
@@ -704,6 +710,10 @@ class LineageAnalyzer:
 
         # For DROP, the target is self.expr.this
         elif isinstance(self.expr, exp.Drop):
+            return table_node is self.expr.this
+
+        # For CACHE TABLE, the target is self.expr.this
+        elif isinstance(self.expr, exp.Cache):
             return table_node is self.expr.this
 
         return False
@@ -889,6 +899,7 @@ class LineageAnalyzer:
             "Drop": f"DROP {getattr(target_expr, 'kind', '')}".strip(),
             "Alter": "ALTER",
             "Truncate": "TRUNCATE",
+            "Cache": "CACHE TABLE",
             "Command": "COMMAND",
         }
 
@@ -942,6 +953,17 @@ class LineageAnalyzer:
                         select_node, (exp.Select, exp.Union, exp.Intersect, exp.Except)
                     ):
                         return (target_name, select_node)
+
+        # Check for CACHE TABLE AS SELECT
+        elif isinstance(self.expr, exp.Cache):
+            target = self.expr.this
+            if isinstance(target, exp.Table):
+                target_name = self._get_qualified_table_name(target)
+                select_node = self.expr.expression
+                if isinstance(
+                    select_node, (exp.Select, exp.Union, exp.Intersect, exp.Except)
+                ):
+                    return (target_name, select_node)
 
         # Check for MERGE statement
         elif isinstance(self.expr, exp.Merge):

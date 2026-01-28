@@ -2820,3 +2820,89 @@ class TestSemiAntiJoinColumnResolution:
         analyzer_semi = LineageAnalyzer(sql_semi, dialect="spark")
         analyzer_semi.analyze_queries(level=AnalysisLevel.COLUMN)
         assert set(analyzer_semi._file_schema["v3"].keys()) == {"a"}
+
+
+class TestCacheTableStatements:
+    """Tests for Spark SQL CACHE TABLE statement support."""
+
+    def test_cache_table_as_select_column_lineage(self):
+        """CACHE TABLE t AS SELECT should produce lineage with t as target."""
+        sql = """
+        CACHE TABLE cached_customers AS
+        SELECT customer_id, customer_name FROM customers
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
+
+        assert len(results) == 1
+        output_names = [item.output_name for item in results[0].lineage_items]
+        assert any("cached_customers" in name for name in output_names)
+        assert any("customer_id" in name for name in output_names)
+        assert any("customer_name" in name for name in output_names)
+
+    def test_cache_table_as_select_table_extraction(self):
+        """CACHE TABLE t AS SELECT should show cached_orders as OUTPUT table."""
+        sql = """
+        CACHE TABLE cached_orders AS
+        SELECT order_id, total FROM orders
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_tables()
+
+        assert len(results) == 1
+        tables_by_name = {t.name: t for t in results[0].tables}
+
+        assert "cached_orders" in tables_by_name
+        assert tables_by_name["cached_orders"].usage.value == "OUTPUT"
+        assert tables_by_name["cached_orders"].object_type.value == "TABLE"
+
+        assert "orders" in tables_by_name
+        assert tables_by_name["orders"].usage.value == "INPUT"
+
+    def test_cache_table_as_select_with_join(self):
+        """CACHE TABLE with a JOIN query should trace all sources."""
+        sql = """
+        CACHE TABLE summary AS
+        SELECT c.customer_id, o.total
+        FROM customers c
+        JOIN orders o ON c.id = o.customer_id
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_tables()
+
+        assert len(results) == 1
+        tables_by_name = {t.name: t for t in results[0].tables}
+
+        assert "summary" in tables_by_name
+        assert tables_by_name["summary"].usage.value == "OUTPUT"
+        assert "customers" in tables_by_name
+        assert tables_by_name["customers"].usage.value == "INPUT"
+        assert "orders" in tables_by_name
+        assert tables_by_name["orders"].usage.value == "INPUT"
+
+    def test_bare_cache_table_is_skipped(self):
+        """CACHE TABLE t (without AS SELECT) should be skipped."""
+        sql = "CACHE TABLE my_table"
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
+
+        assert len(results) == 0
+        skipped = analyzer.skipped_queries
+        assert len(skipped) == 1
+        assert "CACHE" in skipped[0].statement_type
+
+    def test_cache_table_in_multi_query(self):
+        """CACHE TABLE should work alongside other statements in multi-query files."""
+        sql = """
+        SELECT id FROM users;
+        CACHE TABLE cached_orders AS SELECT order_id FROM orders;
+        DELETE FROM old_data;
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
+
+        # SELECT and CACHE TABLE should produce results; DELETE is skipped
+        assert len(results) == 2
+        skipped = analyzer.skipped_queries
+        assert len(skipped) == 1
+        assert "DELETE" in skipped[0].statement_type
