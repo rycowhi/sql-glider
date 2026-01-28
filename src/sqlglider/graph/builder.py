@@ -117,8 +117,8 @@ class GraphBuilder:
                     edge_key = (item.source_name.lower(), item.output_name.lower())
                     if edge_key not in self._edge_set:
                         edge = GraphEdge(
-                            source_node=item.source_name,
-                            target_node=item.output_name,
+                            source_node=item.source_name.lower(),
+                            target_node=item.output_name.lower(),
                             file_path=file_path_str,
                             query_index=query_index,
                         )
@@ -285,7 +285,7 @@ class GraphBuilder:
             return self._node_index_map[key]
 
         node = GraphNode.from_identifier(
-            identifier=identifier,
+            identifier=key,
             file_path=file_path,
             query_index=query_index,
         )

@@ -196,7 +196,7 @@ class TestGraphQuerierUpstream:
         # Query with different case
         result = querier.find_upstream("TARGET.COLUMN")
 
-        assert result.query_column == "Target.Column"  # Original case preserved
+        assert result.query_column == "target.column"  # Normalized to lowercase
         assert len(result) == 1
 
 
@@ -302,7 +302,7 @@ class TestGraphQuerierDownstream:
         # Query with different case
         result = querier.find_downstream("source.column")
 
-        assert result.query_column == "Source.Column"  # Original case preserved
+        assert result.query_column == "source.column"  # Normalized to lowercase
         assert len(result) == 1
 
 

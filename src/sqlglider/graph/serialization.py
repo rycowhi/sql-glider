@@ -61,15 +61,15 @@ def to_rustworkx(graph: LineageGraph) -> Tuple[rx.PyDiGraph, Dict[str, int]]:
     rx_graph: rx.PyDiGraph = rx.PyDiGraph()
     node_map: Dict[str, int] = {}
 
-    # Add nodes
+    # Add nodes (use lowercase keys for case-insensitive lookup)
     for node in graph.nodes:
         idx = rx_graph.add_node(node.model_dump())
-        node_map[node.identifier] = idx
+        node_map[node.identifier.lower()] = idx
 
-    # Add edges
+    # Add edges (use lowercase for lookup to match node keys)
     for edge in graph.edges:
-        source_idx = node_map.get(edge.source_node)
-        target_idx = node_map.get(edge.target_node)
+        source_idx = node_map.get(edge.source_node.lower())
+        target_idx = node_map.get(edge.target_node.lower())
         if source_idx is not None and target_idx is not None:
             rx_graph.add_edge(source_idx, target_idx, edge.model_dump())
 
