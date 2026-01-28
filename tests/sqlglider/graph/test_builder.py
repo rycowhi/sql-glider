@@ -578,3 +578,56 @@ class TestGraphBuilderCreateViewWithCTEAndWindowFunction:
         assert "raw_sales.customer_id" in node_ids
         assert "raw_sales.product_id" in node_ids
         assert "raw_sales.quantity" in node_ids
+
+
+class TestGraphBuilderCaseInsensitive:
+    """Tests for case-insensitive node deduplication during graph build."""
+
+    def test_nodes_deduplicated_across_files_different_case(self, tmp_path):
+        """Nodes with different casing should be deduplicated into one node."""
+        file1 = tmp_path / "query1.sql"
+        file1.write_text("SELECT Customer_ID FROM Orders;")
+
+        file2 = tmp_path / "query2.sql"
+        file2.write_text("SELECT customer_id FROM orders;")
+
+        builder = GraphBuilder()
+        builder.add_file(file1)
+        builder.add_file(file2)
+        graph = builder.build()
+
+        # Should have deduplicated nodes regardless of case
+        identifiers_lower = [n.identifier.lower() for n in graph.nodes]
+        assert identifiers_lower.count("orders.customer_id") == 1
+
+    def test_edges_deduplicated_across_files_different_case(self, tmp_path):
+        """Edges with different casing should be deduplicated."""
+        file1 = tmp_path / "query1.sql"
+        file1.write_text("SELECT Customer_Name FROM Customers;")
+
+        file2 = tmp_path / "query2.sql"
+        file2.write_text("SELECT customer_name FROM customers;")
+
+        builder = GraphBuilder()
+        builder.add_file(file1)
+        builder.add_file(file2)
+        graph = builder.build()
+
+        # Edges should be deduplicated
+        edge_pairs = [
+            (e.source_node.lower(), e.target_node.lower()) for e in graph.edges
+        ]
+        for pair in edge_pairs:
+            assert edge_pairs.count(pair) == 1
+
+    def test_node_index_map_uses_lowercase_keys(self, tmp_path):
+        """The internal node index map should use lowercase keys."""
+        sql_file = tmp_path / "query.sql"
+        sql_file.write_text("SELECT Customer_ID FROM Orders;")
+
+        builder = GraphBuilder()
+        builder.add_file(sql_file)
+
+        # All keys in the node index map should be lowercase
+        for key in builder.node_index_map:
+            assert key == key.lower(), f"Node index map key '{key}' is not lowercase"

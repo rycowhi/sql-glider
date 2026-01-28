@@ -114,7 +114,7 @@ class GraphBuilder:
                     )
 
                     # Add edge (source contributes_to target) - deduplicate
-                    edge_key = (item.source_name, item.output_name)
+                    edge_key = (item.source_name.lower(), item.output_name.lower())
                     if edge_key not in self._edge_set:
                         edge = GraphEdge(
                             source_node=item.source_name,
@@ -280,8 +280,9 @@ class GraphBuilder:
         Returns:
             rustworkx node index
         """
-        if identifier in self._node_index_map:
-            return self._node_index_map[identifier]
+        key = identifier.lower()
+        if key in self._node_index_map:
+            return self._node_index_map[key]
 
         node = GraphNode.from_identifier(
             identifier=identifier,
@@ -290,7 +291,7 @@ class GraphBuilder:
         )
 
         node_idx = self.graph.add_node(node.model_dump())
-        self._node_index_map[identifier] = node_idx
+        self._node_index_map[key] = node_idx
         return node_idx
 
     def build(self) -> LineageGraph:
