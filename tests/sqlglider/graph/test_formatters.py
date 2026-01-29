@@ -7,6 +7,10 @@ from sqlglider.graph.formatters import (
     format_schema_csv,
     format_schema_json,
     format_schema_text,
+    load_schema_file,
+    parse_schema_csv,
+    parse_schema_json,
+    parse_schema_text,
 )
 
 
@@ -84,3 +88,61 @@ class TestFormatSchema:
     def test_invalid_format(self, sample_schema):
         with pytest.raises(ValueError, match="Invalid schema format"):
             format_schema(sample_schema, "xml")
+
+
+class TestParseSchemaJson:
+    def test_round_trip(self, sample_schema):
+        content = format_schema_json(sample_schema)
+        parsed = parse_schema_json(content)
+        assert parsed == sample_schema
+
+    def test_empty(self):
+        assert parse_schema_json("{}") == {}
+
+
+class TestParseSchemaCsv:
+    def test_round_trip(self, sample_schema):
+        content = format_schema_csv(sample_schema)
+        parsed = parse_schema_csv(content)
+        assert parsed == sample_schema
+
+    def test_empty(self):
+        parsed = parse_schema_csv("table,column,type\n")
+        assert parsed == {}
+
+
+class TestParseSchemaText:
+    def test_round_trip(self, sample_schema):
+        content = format_schema_text(sample_schema)
+        parsed = parse_schema_text(content)
+        assert parsed == sample_schema
+
+    def test_empty(self):
+        assert parse_schema_text("") == {}
+
+    def test_single_table(self):
+        content = "users\n  id\n  name\n"
+        parsed = parse_schema_text(content)
+        assert parsed == {"users": {"id": "UNKNOWN", "name": "UNKNOWN"}}
+
+
+class TestLoadSchemaFile:
+    def test_json_extension(self, tmp_path, sample_schema):
+        f = tmp_path / "schema.json"
+        f.write_text(format_schema_json(sample_schema))
+        assert load_schema_file(f) == sample_schema
+
+    def test_csv_extension(self, tmp_path, sample_schema):
+        f = tmp_path / "schema.csv"
+        f.write_text(format_schema_csv(sample_schema))
+        assert load_schema_file(f) == sample_schema
+
+    def test_txt_extension(self, tmp_path, sample_schema):
+        f = tmp_path / "schema.txt"
+        f.write_text(format_schema_text(sample_schema))
+        assert load_schema_file(f) == sample_schema
+
+    def test_no_extension_treated_as_text(self, tmp_path, sample_schema):
+        f = tmp_path / "schema"
+        f.write_text(format_schema_text(sample_schema))
+        assert load_schema_file(f) == sample_schema

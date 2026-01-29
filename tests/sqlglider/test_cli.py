@@ -1884,3 +1884,141 @@ class TestTablesScrapeCommand:
 
         data = json.loads(result.stdout)
         assert "customers" in data
+
+
+class TestProvideSchema:
+    """Tests for --provide-schema on lineage and graph build commands."""
+
+    @pytest.fixture
+    def star_query_file(self, tmp_path):
+        """SQL file with SELECT * that needs schema to resolve."""
+        sql_file = tmp_path / "star.sql"
+        sql_file.write_text("SELECT * FROM users")
+        return sql_file
+
+    @pytest.fixture
+    def schema_json_file(self, tmp_path):
+        schema = tmp_path / "schema.json"
+        schema.write_text('{"users": {"id": "UNKNOWN", "name": "UNKNOWN"}}')
+        return schema
+
+    def test_lineage_with_provide_schema(self, star_query_file, schema_json_file):
+        """Test that --provide-schema resolves SELECT * in lineage."""
+        result = runner.invoke(
+            app,
+            [
+                "lineage",
+                str(star_query_file),
+                "--provide-schema",
+                str(schema_json_file),
+                "--output-format",
+                "json",
+            ],
+        )
+
+        assert result.exit_code == 0
+        import json
+
+        data = json.loads(result.stdout)
+        columns = [item["output_name"] for item in data["queries"][0]["lineage"]]
+        assert "id" in columns
+        assert "name" in columns
+
+    def test_graph_build_with_provide_schema(
+        self, star_query_file, schema_json_file, tmp_path
+    ):
+        """Test that --provide-schema works with graph build."""
+        output = tmp_path / "graph.json"
+        result = runner.invoke(
+            app,
+            [
+                "graph",
+                "build",
+                str(star_query_file),
+                "-o",
+                str(output),
+                "--provide-schema",
+                str(schema_json_file),
+            ],
+        )
+
+        assert result.exit_code == 0
+        assert output.exists()
+        import json
+
+        graph = json.loads(output.read_text())
+        assert graph["metadata"]["total_nodes"] > 0
+
+
+class TestProvideSchemaRoundTrip:
+    """Integration: tables scrape -> schema file -> graph build --provide-schema."""
+
+    @pytest.fixture
+    def sql_dir(self, tmp_path):
+        d = tmp_path / "sql"
+        d.mkdir()
+        (d / "a.sql").write_text(
+            "CREATE TABLE output_table AS SELECT c.id, c.name FROM customers c;"
+        )
+        (d / "b.sql").write_text("SELECT * FROM output_table")
+        return d
+
+    @pytest.mark.parametrize(
+        "fmt,ext", [("json", ".json"), ("csv", ".csv"), ("text", ".txt")]
+    )
+    def test_round_trip(self, sql_dir, tmp_path, fmt, ext):
+        """Scrape schema, save to file, then use --provide-schema to build graph."""
+        schema_file = tmp_path / f"schema{ext}"
+        graph_provided = tmp_path / "graph_provided.json"
+        graph_resolved = tmp_path / "graph_resolved.json"
+
+        # Step 1: Scrape schema
+        scrape_result = runner.invoke(
+            app,
+            ["tables", "scrape", str(sql_dir), "-f", fmt, "-o", str(schema_file)],
+        )
+        assert scrape_result.exit_code == 0
+        assert schema_file.exists()
+
+        # Step 2: Build graph with --provide-schema
+        result_provided = runner.invoke(
+            app,
+            [
+                "graph",
+                "build",
+                str(sql_dir),
+                "-o",
+                str(graph_provided),
+                "--provide-schema",
+                str(schema_file),
+            ],
+        )
+        assert result_provided.exit_code == 0
+
+        # Step 3: Build graph with --resolve-schema
+        result_resolved = runner.invoke(
+            app,
+            [
+                "graph",
+                "build",
+                str(sql_dir),
+                "-o",
+                str(graph_resolved),
+                "--resolve-schema",
+            ],
+        )
+        assert result_resolved.exit_code == 0
+
+        # Step 4: Compare graphs (nodes and edges should match)
+        import json
+
+        g1 = json.loads(graph_provided.read_text())
+        g2 = json.loads(graph_resolved.read_text())
+
+        nodes1 = sorted([n["identifier"] for n in g1["nodes"]])
+        nodes2 = sorted([n["identifier"] for n in g2["nodes"]])
+        assert nodes1 == nodes2
+
+        edges1 = sorted([(e["source_node"], e["target_node"]) for e in g1["edges"]])
+        edges2 = sorted([(e["source_node"], e["target_node"]) for e in g2["edges"]])
+        assert edges1 == edges2

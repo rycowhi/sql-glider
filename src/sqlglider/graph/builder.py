@@ -303,6 +303,21 @@ class GraphBuilder:
                 self.add_file(file_path, dialect)
         return self
 
+    def set_schema(self, schema: Dict[str, Dict[str, str]]) -> "GraphBuilder":
+        """Pre-seed the resolved schema from an external source.
+
+        This allows skipping the schema extraction pass when the schema
+        is already known (e.g., loaded from a file).
+
+        Args:
+            schema: Schema dictionary mapping table names to column dicts.
+
+        Returns:
+            self for method chaining
+        """
+        self._resolved_schema = schema
+        return self
+
     def extract_schemas(
         self,
         file_paths: List[Path],
@@ -325,6 +340,7 @@ class GraphBuilder:
             file_paths,
             dialect=file_dialect,
             sql_preprocessor=self.sql_preprocessor,
+            initial_schema=self._resolved_schema if self._resolved_schema else None,
             strict_schema=self.strict_schema,
             catalog_type=self.catalog_type,
             catalog_config=self.catalog_config,

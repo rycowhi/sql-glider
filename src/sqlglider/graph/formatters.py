@@ -1,8 +1,9 @@
-"""Output formatters for resolved schema data."""
+"""Output formatters and parsers for resolved schema data."""
 
 import csv
 import json
 from io import StringIO
+from pathlib import Path
 from typing import Dict
 
 SchemaDict = Dict[str, Dict[str, str]]
@@ -96,3 +97,93 @@ def format_schema(schema: SchemaDict, output_format: str = "text") -> str:
             f"Invalid schema format '{output_format}'. Use 'text', 'json', or 'csv'."
         )
     return formatter(schema)
+
+
+def parse_schema_json(content: str) -> SchemaDict:
+    """Parse schema from JSON format.
+
+    Args:
+        content: JSON string with table -> {column -> type} structure.
+
+    Returns:
+        Parsed schema dictionary.
+    """
+    return json.loads(content)  # type: ignore[no-any-return]
+
+
+def parse_schema_csv(content: str) -> SchemaDict:
+    """Parse schema from CSV format.
+
+    Expects columns: table, column, type.
+
+    Args:
+        content: CSV string with header row.
+
+    Returns:
+        Parsed schema dictionary.
+    """
+    schema: SchemaDict = {}
+    reader = csv.DictReader(StringIO(content))
+    for row in reader:
+        table = row["table"]
+        column = row["column"]
+        col_type = row.get("type", "UNKNOWN")
+        if table not in schema:
+            schema[table] = {}
+        schema[table][column] = col_type
+    return schema
+
+
+def parse_schema_text(content: str) -> SchemaDict:
+    """Parse schema from indented text format.
+
+    Expected format:
+        table_name
+          column1
+          column2
+
+        other_table
+          col_a
+
+    Args:
+        content: Text-formatted schema string.
+
+    Returns:
+        Parsed schema dictionary.
+    """
+    schema: SchemaDict = {}
+    current_table: str | None = None
+    for line in content.splitlines():
+        if not line or not line.strip():
+            continue
+        if line.startswith("  "):
+            if current_table is not None:
+                schema[current_table][line.strip()] = "UNKNOWN"
+        else:
+            current_table = line.strip()
+            schema[current_table] = {}
+    return schema
+
+
+def load_schema_file(path: Path) -> SchemaDict:
+    """Load a schema file, auto-detecting format from extension.
+
+    `.json` → JSON, `.csv` → CSV, otherwise text.
+
+    Args:
+        path: Path to schema file.
+
+    Returns:
+        Parsed schema dictionary.
+
+    Raises:
+        FileNotFoundError: If the file does not exist.
+    """
+    content = path.read_text(encoding="utf-8")
+    suffix = path.suffix.lower()
+    if suffix == ".json":
+        return parse_schema_json(content)
+    elif suffix == ".csv":
+        return parse_schema_csv(content)
+    else:
+        return parse_schema_text(content)

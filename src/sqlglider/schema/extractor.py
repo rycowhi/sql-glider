@@ -153,6 +153,7 @@ def extract_and_resolve_schema(
     file_paths: List[Path],
     dialect: str = "spark",
     sql_preprocessor: Optional[SqlPreprocessor] = None,
+    initial_schema: Optional[SchemaDict] = None,
     strict_schema: bool = False,
     catalog_type: Optional[str] = None,
     catalog_config: Optional[Dict[str, object]] = None,
@@ -167,6 +168,7 @@ def extract_and_resolve_schema(
         file_paths: SQL files to extract schema from.
         dialect: SQL dialect.
         sql_preprocessor: Optional SQL preprocessor.
+        initial_schema: Optional starting schema to build upon.
         strict_schema: If True, fail on ambiguous column attribution.
         catalog_type: Optional catalog provider name.
         catalog_config: Optional provider-specific configuration dict.
@@ -183,6 +185,7 @@ def extract_and_resolve_schema(
         file_paths,
         dialect=dialect,
         sql_preprocessor=sql_preprocessor,
+        initial_schema=initial_schema,
         strict_schema=strict_schema,
         console=console,
     )

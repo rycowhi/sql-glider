@@ -171,6 +171,12 @@ def lineage(
         "--no-star",
         help="Fail if SELECT * cannot be resolved to actual columns",
     ),
+    provide_schema: Optional[Path] = typer.Option(
+        None,
+        "--provide-schema",
+        exists=True,
+        help="Path to a schema file (JSON, CSV, or text) for star resolution",
+    ),
 ) -> None:
     """
     Analyze column or table lineage for a SQL file.
@@ -266,8 +272,15 @@ def lineage(
             source_path=source_path,
         )
 
+        # Load provided schema if specified
+        schema = None
+        if provide_schema:
+            from sqlglider.graph.formatters import load_schema_file
+
+            schema = load_schema_file(provide_schema)
+
         # Create analyzer
-        analyzer = LineageAnalyzer(sql, dialect=dialect, no_star=no_star)
+        analyzer = LineageAnalyzer(sql, dialect=dialect, no_star=no_star, schema=schema)
 
         # Unified lineage analysis (handles both single and multi-query files)
         results = analyzer.analyze_queries(
@@ -1292,6 +1305,13 @@ def graph_build(
         "--dump-schema-format",
         help="Format for dumped schema: 'text' (default), 'json', or 'csv'",
     ),
+    provide_schema: Optional[Path] = typer.Option(
+        None,
+        "--provide-schema",
+        exists=True,
+        help="Path to a schema file (JSON, CSV, or text) to use for star resolution. "
+        "Can be combined with --resolve-schema to merge file-extracted schema on top.",
+    ),
     strict_schema: bool = typer.Option(
         False,
         "--strict-schema",
@@ -1433,6 +1453,17 @@ def graph_build(
             catalog_config=catalog_config_dict,
             strict_schema=strict_schema,
         )
+
+        # Load provided schema file if specified
+        if provide_schema:
+            from sqlglider.graph.formatters import load_schema_file
+
+            loaded_schema = load_schema_file(provide_schema)
+            builder.set_schema(loaded_schema)
+            console.print(
+                f"[green]Loaded schema from {provide_schema} "
+                f"({len(loaded_schema)} table(s))[/green]"
+            )
 
         # Collect file paths for schema extraction
         manifest_files, path_files = _collect_sql_files(
