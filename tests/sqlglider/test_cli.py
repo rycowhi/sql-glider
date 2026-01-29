@@ -1723,3 +1723,164 @@ class TestStdinSupport:
         data = json.loads(result.stdout)
         # Should have two queries
         assert len(data["queries"]) == 2
+
+
+class TestTablesScrapeCommand:
+    """Tests for the tables scrape command."""
+
+    @pytest.fixture
+    def ddl_sql_file(self, tmp_path):
+        """Create a SQL file with CREATE TABLE AS SELECT."""
+        sql_file = tmp_path / "schema.sql"
+        sql_file.write_text(
+            "CREATE TABLE customers AS SELECT id, name, email FROM raw_customers;"
+        )
+        return sql_file
+
+    @pytest.fixture
+    def dql_sql_file(self, tmp_path):
+        """Create a SQL file with qualified column references."""
+        sql_file = tmp_path / "query.sql"
+        sql_file.write_text("SELECT c.id, c.name FROM customers c;")
+        return sql_file
+
+    def test_scrape_single_file_text(self, ddl_sql_file):
+        """Test scraping schema from a single file with text output."""
+        result = runner.invoke(app, ["tables", "scrape", str(ddl_sql_file)])
+
+        assert result.exit_code == 0
+        assert "customers" in result.stdout
+        assert "id" in result.stdout
+        assert "name" in result.stdout
+
+    def test_scrape_json_output(self, ddl_sql_file):
+        """Test JSON output format."""
+        result = runner.invoke(
+            app, ["tables", "scrape", str(ddl_sql_file), "-f", "json"]
+        )
+
+        assert result.exit_code == 0
+        import json
+
+        data = json.loads(result.stdout)
+        assert "customers" in data
+        assert "id" in data["customers"]
+
+    def test_scrape_csv_output(self, ddl_sql_file):
+        """Test CSV output format."""
+        result = runner.invoke(
+            app, ["tables", "scrape", str(ddl_sql_file), "-f", "csv"]
+        )
+
+        assert result.exit_code == 0
+        assert "table,column,type" in result.stdout
+        assert "customers" in result.stdout
+
+    def test_scrape_output_file(self, ddl_sql_file, tmp_path):
+        """Test writing output to file."""
+        output = tmp_path / "schema.json"
+        result = runner.invoke(
+            app,
+            ["tables", "scrape", str(ddl_sql_file), "-f", "json", "-o", str(output)],
+        )
+
+        assert result.exit_code == 0
+        assert output.exists()
+        import json
+
+        data = json.loads(output.read_text())
+        assert "customers" in data
+
+    def test_scrape_directory(self):
+        """Test scraping schema from a directory."""
+        with TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            (tmppath / "a.sql").write_text("SELECT u.id, u.name FROM users u;")
+            (tmppath / "b.sql").write_text(
+                "SELECT o.order_id, o.user_id FROM orders o;"
+            )
+
+            result = runner.invoke(app, ["tables", "scrape", str(tmppath)])
+
+            assert result.exit_code == 0
+            assert "users" in result.stdout
+            assert "orders" in result.stdout
+
+    def test_scrape_recursive(self):
+        """Test recursive directory scanning."""
+        with TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            subdir = tmppath / "sub"
+            subdir.mkdir()
+            (subdir / "query.sql").write_text("SELECT t.col1 FROM nested_table t;")
+
+            # Without recursive, should not find files in subdirectory
+            result = runner.invoke(app, ["tables", "scrape", str(tmppath)])
+            assert "nested_table" not in result.stdout
+
+            # With recursive, should find files
+            result = runner.invoke(app, ["tables", "scrape", str(tmppath), "-r"])
+            assert result.exit_code == 0
+            assert "nested_table" in result.stdout
+
+    def test_scrape_no_input_error(self):
+        """Test error when no input is provided."""
+        result = runner.invoke(app, ["tables", "scrape"])
+        assert result.exit_code != 0
+
+    def test_scrape_invalid_format(self, ddl_sql_file):
+        """Test error on invalid output format."""
+        result = runner.invoke(
+            app, ["tables", "scrape", str(ddl_sql_file), "-f", "xml"]
+        )
+        assert result.exit_code != 0
+
+    def test_scrape_multiple_files(self):
+        """Test scraping from multiple file arguments."""
+        with TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            file1 = tmppath / "a.sql"
+            file1.write_text("SELECT t1.id FROM t1;")
+            file2 = tmppath / "b.sql"
+            file2.write_text("SELECT t2.name FROM t2;")
+
+            result = runner.invoke(app, ["tables", "scrape", str(file1), str(file2)])
+
+            assert result.exit_code == 0
+            assert "t1" in result.stdout
+            assert "t2" in result.stdout
+
+    def test_scrape_with_templating(self):
+        """Test scraping with Jinja2 templating."""
+        with TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            sql_file = tmppath / "template.sql"
+            sql_file.write_text("SELECT u.id, u.name FROM {{ schema }}.users u;")
+
+            result = runner.invoke(
+                app,
+                [
+                    "tables",
+                    "scrape",
+                    str(sql_file),
+                    "--templater",
+                    "jinja",
+                    "--var",
+                    "schema=prod",
+                ],
+            )
+
+            assert result.exit_code == 0
+            assert "prod.users" in result.stdout
+
+    def test_scrape_dql_inference(self, dql_sql_file):
+        """Test schema inference from DQL qualified column references."""
+        result = runner.invoke(
+            app, ["tables", "scrape", str(dql_sql_file), "-f", "json"]
+        )
+
+        assert result.exit_code == 0
+        import json
+
+        data = json.loads(result.stdout)
+        assert "customers" in data

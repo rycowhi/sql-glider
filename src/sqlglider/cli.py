@@ -788,6 +788,274 @@ def tables_pull(
         raise typer.Exit(1)
 
 
+def _collect_sql_files(
+    paths: Optional[List[Path]],
+    manifest: Optional[Path],
+    recursive: bool,
+    glob_pattern: str,
+) -> tuple[list[Path], list[Path]]:
+    """Collect SQL files from paths and/or manifest.
+
+    Args:
+        paths: File or directory paths to scan.
+        manifest: Optional manifest CSV path.
+        recursive: Whether to recurse into directories.
+        glob_pattern: Glob pattern for directory scanning.
+
+    Returns:
+        Tuple of (manifest_files, path_files).
+    """
+    path_files: list[Path] = []
+    if paths:
+        for path in paths:
+            if path.is_dir():
+                pattern = f"**/{glob_pattern}" if recursive else glob_pattern
+                path_files.extend(f for f in sorted(path.glob(pattern)) if f.is_file())
+            elif path.is_file():
+                path_files.append(path)
+            else:
+                err_console.print(f"[red]Error:[/red] Path not found: {path}")
+                raise typer.Exit(1)
+
+    manifest_files: list[Path] = []
+    if manifest:
+        from sqlglider.graph.models import Manifest
+
+        manifest_data = Manifest.from_csv(manifest)
+        base_dir = manifest.parent
+        for entry in manifest_data.entries:
+            file_path = Path(entry.file_path)
+            if not file_path.is_absolute():
+                file_path = (base_dir / entry.file_path).resolve()
+            manifest_files.append(file_path)
+
+    return manifest_files, path_files
+
+
+@tables_app.command("scrape")
+def tables_scrape(
+    paths: List[Path] = typer.Argument(
+        None,
+        help="SQL file(s) or directory path to process",
+    ),
+    recursive: bool = typer.Option(
+        False,
+        "--recursive",
+        "-r",
+        help="Recursively search directories for SQL files",
+    ),
+    glob_pattern: str = typer.Option(
+        "*.sql",
+        "--glob",
+        "-g",
+        help="Glob pattern for matching SQL files in directories",
+    ),
+    manifest: Optional[Path] = typer.Option(
+        None,
+        "--manifest",
+        "-m",
+        exists=True,
+        help="Path to manifest CSV file with file_path and optional dialect columns",
+    ),
+    dialect: Optional[str] = typer.Option(
+        None,
+        "--dialect",
+        "-d",
+        help="SQL dialect (default: spark)",
+    ),
+    templater: Optional[str] = typer.Option(
+        None,
+        "--templater",
+        "-t",
+        help="Templater for SQL preprocessing (e.g., 'jinja', 'none')",
+    ),
+    var: Optional[List[str]] = typer.Option(
+        None,
+        "--var",
+        "-v",
+        help="Template variable in key=value format (repeatable)",
+    ),
+    vars_file: Optional[Path] = typer.Option(
+        None,
+        "--vars-file",
+        exists=True,
+        help="Path to variables file (JSON or YAML)",
+    ),
+    strict_schema: bool = typer.Option(
+        False,
+        "--strict-schema",
+        help="Fail if any column's table cannot be identified during schema extraction",
+    ),
+    catalog_type: Optional[str] = typer.Option(
+        None,
+        "--catalog-type",
+        "-c",
+        help="Catalog provider for pulling DDL of tables not found in files "
+        "(e.g. 'databricks')",
+    ),
+    output_format: Optional[str] = typer.Option(
+        None,
+        "--output-format",
+        "-f",
+        help="Output format: 'text' (default), 'json', or 'csv'",
+    ),
+    output_file: Optional[Path] = typer.Option(
+        None,
+        "--output-file",
+        "-o",
+        help="Output file path (prints to stdout if not provided)",
+    ),
+) -> None:
+    """
+    Scrape schema information from SQL files.
+
+    Infers table and column schemas from DDL statements and DQL column
+    references across one or more SQL files. Supports the same file input
+    modes as `graph build` (paths, directories, manifests).
+
+    Examples:
+
+        # Scrape schema from a directory
+        sqlglider tables scrape ./queries/ -r
+
+        # Output as JSON
+        sqlglider tables scrape ./queries/ -r -f json
+
+        # Save to file
+        sqlglider tables scrape ./queries/ -r -f csv -o schema.csv
+
+        # With Jinja2 templating
+        sqlglider tables scrape ./queries/ -r --templater jinja --var schema=prod
+
+        # With catalog fallback
+        sqlglider tables scrape ./queries/ -r -c databricks
+    """
+    from sqlglider.graph.formatters import format_schema
+    from sqlglider.lineage.analyzer import SchemaResolutionError
+    from sqlglider.schema.extractor import extract_and_resolve_schema
+
+    # Load config for defaults
+    config = load_config()
+    dialect = dialect or config.dialect or "spark"
+    templater = templater or config.templater
+    strict_schema = strict_schema or config.strict_schema or False
+    output_format = output_format or config.output_format or "text"
+
+    if output_format not in ("text", "json", "csv"):
+        err_console.print(
+            f"[red]Error:[/red] Invalid --output-format '{output_format}'. "
+            "Use 'text', 'json', or 'csv'."
+        )
+        raise typer.Exit(1)
+
+    # Only inherit catalog_type from config when not provided via CLI
+    if not catalog_type:
+        catalog_type = config.catalog_type
+
+    # Validate inputs
+    if not paths and not manifest:
+        err_console.print(
+            "[red]Error:[/red] Must provide either file/directory paths or --manifest option."
+        )
+        raise typer.Exit(1)
+
+    # Create SQL preprocessor if templating is enabled
+    sql_preprocessor: Optional[Callable[[str, Path], str]] = None
+    if templater:
+        config_vars_file = None
+        config_vars = None
+        if config.templating:
+            if config.templating.variables_file and not vars_file:
+                config_vars_file = Path(config.templating.variables_file)
+                if not config_vars_file.exists():
+                    err_console.print(
+                        f"[yellow]Warning:[/yellow] Variables file from config "
+                        f"not found: {config_vars_file}"
+                    )
+                    config_vars_file = None
+            config_vars = config.templating.variables
+
+        variables = load_all_variables(
+            cli_vars=var,
+            vars_file=vars_file or config_vars_file,
+            config_vars=config_vars,
+            use_env=True,
+        )
+
+        templater_instance = get_templater(templater)
+
+        def _preprocess(sql: str, file_path: Path) -> str:
+            return templater_instance.render(
+                sql, variables=variables, source_path=file_path
+            )
+
+        sql_preprocessor = _preprocess
+
+    try:
+        # Build catalog config from config file if available
+        catalog_config_dict = None
+        if catalog_type and config.catalog:
+            provider_config = getattr(config.catalog, catalog_type, None)
+            if provider_config:
+                catalog_config_dict = provider_config.model_dump(exclude_none=True)
+
+        # Collect files
+        manifest_files, path_files = _collect_sql_files(
+            paths, manifest, recursive, glob_pattern
+        )
+        all_files = manifest_files + path_files
+
+        if not all_files:
+            err_console.print("[yellow]Warning:[/yellow] No SQL files found.")
+            raise typer.Exit(0)
+
+        # Extract schema
+        schema = extract_and_resolve_schema(
+            all_files,
+            dialect=dialect,
+            sql_preprocessor=sql_preprocessor,
+            strict_schema=strict_schema,
+            catalog_type=catalog_type,
+            catalog_config=catalog_config_dict,
+            console=err_console,
+        )
+
+        if not schema:
+            err_console.print("[yellow]No schema information found.[/yellow]")
+            raise typer.Exit(0)
+
+        # Format and output
+        formatted = format_schema(schema, output_format)
+        if output_file:
+            OutputWriter.write(formatted, output_file)
+            err_console.print(
+                f"[green]Schema written to {output_file} "
+                f"({len(schema)} table(s))[/green]"
+            )
+        else:
+            console.print(formatted, end="")
+
+    except SchemaResolutionError as e:
+        err_console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+
+    except FileNotFoundError as e:
+        err_console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+
+    except TemplaterError as e:
+        err_console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+
+    except ValueError as e:
+        err_console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+
+    except Exception as e:
+        err_console.print(f"[red]Error:[/red] Unexpected error: {e}")
+        raise typer.Exit(1)
+
+
 @app.command()
 def template(
     sql_file: Annotated[
@@ -1167,31 +1435,9 @@ def graph_build(
         )
 
         # Collect file paths for schema extraction
-        path_files: list[Path] = []
-        if paths:
-            for path in paths:
-                if path.is_dir():
-                    pattern = f"**/{glob_pattern}" if recursive else glob_pattern
-                    path_files.extend(
-                        f for f in sorted(path.glob(pattern)) if f.is_file()
-                    )
-                elif path.is_file():
-                    path_files.append(path)
-                else:
-                    err_console.print(f"[red]Error:[/red] Path not found: {path}")
-                    raise typer.Exit(1)
-
-        manifest_files: list[Path] = []
-        if manifest:
-            from sqlglider.graph.models import Manifest
-
-            manifest_data = Manifest.from_csv(manifest)
-            base_dir = manifest.parent
-            for entry in manifest_data.entries:
-                file_path = Path(entry.file_path)
-                if not file_path.is_absolute():
-                    file_path = (base_dir / entry.file_path).resolve()
-                manifest_files.append(file_path)
+        manifest_files, path_files = _collect_sql_files(
+            paths, manifest, recursive, glob_pattern
+        )
 
         # Extract schema upfront if requested, then dump before graph building
         all_files = manifest_files + path_files
