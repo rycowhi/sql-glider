@@ -842,3 +842,45 @@ class TestResolvedSchemaProperty:
         schema = builder.resolved_schema
         schema["injected"] = {"col": "UNKNOWN"}
         assert "injected" not in builder.resolved_schema
+
+
+class TestExtractSchemas:
+    """Tests for the public extract_schemas method."""
+
+    def test_extract_schemas_returns_schema(self, tmp_path):
+        """extract_schemas returns inferred schema from files."""
+        sql_file = tmp_path / "query.sql"
+        sql_file.write_text("SELECT c.id, c.name FROM customers c;")
+        builder = GraphBuilder(resolve_schema=True)
+        schema = builder.extract_schemas([sql_file])
+        assert "customers" in schema
+        assert "id" in schema["customers"]
+        assert "name" in schema["customers"]
+
+    def test_extract_schemas_before_add_files(self, tmp_path):
+        """Calling extract_schemas before add_files avoids duplicate extraction."""
+        schema_file = tmp_path / "schema.sql"
+        schema_file.write_text("SELECT c.id, c.name FROM customers c;")
+        query_file = tmp_path / "query.sql"
+        query_file.write_text("SELECT * FROM customers;")
+
+        builder = GraphBuilder(resolve_schema=True)
+        schema = builder.extract_schemas([schema_file, query_file])
+        assert "customers" in schema
+
+        # add_files should skip Pass 1 since schema is already resolved
+        builder.add_files([query_file])
+        graph = builder.build()
+        assert graph is not None
+
+        # Schema should still be the same
+        assert builder.resolved_schema == schema
+
+    def test_extract_schemas_populates_resolved_schema(self, tmp_path):
+        """extract_schemas populates the resolved_schema property."""
+        sql_file = tmp_path / "query.sql"
+        sql_file.write_text("SELECT u.id, u.email FROM users u;")
+        builder = GraphBuilder(resolve_schema=True)
+        assert builder.resolved_schema == {}
+        builder.extract_schemas([sql_file])
+        assert "users" in builder.resolved_schema

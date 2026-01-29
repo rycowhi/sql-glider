@@ -3133,3 +3133,51 @@ class TestSchemaParam:
         schema = analyzer.get_extracted_schema()
         assert "v1" in schema
         assert set(schema["v1"].keys()) == {"id", "name"}
+
+
+class TestSchemaPruning:
+    """Tests that schema pruning doesn't affect lineage correctness."""
+
+    def test_large_schema_same_results_as_small(self):
+        """Lineage results are identical with a large unreferenced schema."""
+        sql = "SELECT c.id, c.name FROM customers c"
+
+        small_schema = {
+            "customers": {"id": "UNKNOWN", "name": "UNKNOWN"},
+        }
+        big_schema = dict(small_schema)
+        for i in range(200):
+            big_schema[f"unrelated_table_{i}"] = {
+                f"col_{j}": "UNKNOWN" for j in range(20)
+            }
+
+        analyzer_small = LineageAnalyzer(sql, dialect="spark", schema=small_schema)
+        results_small = analyzer_small.analyze_queries(level=AnalysisLevel.COLUMN)
+
+        analyzer_big = LineageAnalyzer(sql, dialect="spark", schema=big_schema)
+        results_big = analyzer_big.analyze_queries(level=AnalysisLevel.COLUMN)
+
+        items_small = [
+            (item.output_name, item.source_name)
+            for r in results_small
+            for item in r.lineage_items
+        ]
+        items_big = [
+            (item.output_name, item.source_name)
+            for r in results_big
+            for item in r.lineage_items
+        ]
+        assert items_small == items_big
+
+    def test_star_expansion_works_with_pruned_schema(self):
+        """SELECT * expansion still works when schema is pruned."""
+        sql = "SELECT * FROM users"
+        schema = {
+            "users": {"id": "UNKNOWN", "email": "UNKNOWN"},
+            "unrelated": {"col": "UNKNOWN"},
+        }
+        analyzer = LineageAnalyzer(sql, dialect="spark", schema=schema)
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
+        output_names = {item.output_name for r in results for item in r.lineage_items}
+        assert "id" in output_names
+        assert "email" in output_names

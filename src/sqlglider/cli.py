@@ -1166,36 +1166,57 @@ def graph_build(
             strict_schema=strict_schema,
         )
 
+        # Collect file paths for schema extraction
+        path_files: list[Path] = []
+        if paths:
+            for path in paths:
+                if path.is_dir():
+                    pattern = f"**/{glob_pattern}" if recursive else glob_pattern
+                    path_files.extend(
+                        f for f in sorted(path.glob(pattern)) if f.is_file()
+                    )
+                elif path.is_file():
+                    path_files.append(path)
+                else:
+                    err_console.print(f"[red]Error:[/red] Path not found: {path}")
+                    raise typer.Exit(1)
+
+        manifest_files: list[Path] = []
+        if manifest:
+            from sqlglider.graph.models import Manifest
+
+            manifest_data = Manifest.from_csv(manifest)
+            base_dir = manifest.parent
+            for entry in manifest_data.entries:
+                file_path = Path(entry.file_path)
+                if not file_path.is_absolute():
+                    file_path = (base_dir / entry.file_path).resolve()
+                manifest_files.append(file_path)
+
+        # Extract schema upfront if requested, then dump before graph building
+        all_files = manifest_files + path_files
+        if resolve_schema and all_files:
+            builder.extract_schemas(all_files, dialect=dialect)
+
+            if dump_schema:
+                from sqlglider.graph.formatters import format_schema
+
+                schema_content = format_schema(
+                    builder.resolved_schema, dump_schema_format
+                )
+                dump_schema.write_text(schema_content, encoding="utf-8")
+                console.print(
+                    f"[green]Schema dumped to {dump_schema} "
+                    f"({len(builder.resolved_schema)} table(s))[/green]"
+                )
+
         # Process manifest if provided
         if manifest:
             builder.add_manifest(manifest, dialect=dialect)
 
-        # Process paths - collect all files first for progress tracking
-        if paths:
-            all_files: list[Path] = []
-            for path in paths:
-                if path.is_dir():
-                    pattern = f"**/{glob_pattern}" if recursive else glob_pattern
-                    all_files.extend(
-                        f for f in sorted(path.glob(pattern)) if f.is_file()
-                    )
-                elif path.is_file():
-                    all_files.append(path)
-                else:
-                    err_console.print(f"[red]Error:[/red] Path not found: {path}")
-                    raise typer.Exit(1)
-            builder.add_files(all_files, dialect=dialect)
-
-        # Dump resolved schema if requested
-        if dump_schema:
-            from sqlglider.graph.formatters import format_schema
-
-            schema_content = format_schema(builder.resolved_schema, dump_schema_format)
-            dump_schema.write_text(schema_content, encoding="utf-8")
-            console.print(
-                f"[green]Schema dumped to {dump_schema} "
-                f"({len(builder.resolved_schema)} table(s))[/green]"
-            )
+        # Process path-based files
+        if path_files:
+            builder.add_files(path_files, dialect=dialect)
 
         # Build and save graph
         graph = builder.build()

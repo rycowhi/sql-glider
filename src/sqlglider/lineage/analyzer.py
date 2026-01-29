@@ -859,18 +859,31 @@ class LineageAnalyzer:
         else:
             current_query_sql = self.expr.sql(dialect=self.dialect)
 
+        # Prune schema to only tables referenced in this query to avoid
+        # sqlglot.lineage() performance degradation with large schema dicts
+        pruned_schema: Optional[Dict[str, Dict[str, str]]] = None
+        if self._file_schema:
+            referenced = {t.lower() for t in self._get_query_tables()}
+            pruned_schema = {
+                table: cols
+                for table, cols in self._file_schema.items()
+                if table.lower() in referenced
+            }
+            if not pruned_schema:
+                pruned_schema = None
+
         for col in columns_to_analyze:
             try:
                 # Get the column name that lineage expects
                 lineage_col = self._column_mapping.get(col, col)
 
                 # Get lineage tree for this column using current query SQL only
-                # Pass file schema to enable SELECT * expansion for known tables/views
+                # Pass pruned schema to enable SELECT * expansion for known tables/views
                 node = lineage(
                     lineage_col,
                     current_query_sql,
                     dialect=self.dialect,
-                    schema=self._file_schema if self._file_schema else None,
+                    schema=pruned_schema,
                 )
 
                 # Collect all source columns

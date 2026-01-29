@@ -235,19 +235,10 @@ class GraphBuilder:
         if not files_with_dialects:
             return self
 
-        # Two-pass schema resolution
-        if self.resolve_schema:
-            console.print("[blue]Pass 1: Extracting schema from files[/blue]")
+        # Two-pass schema resolution (skip if already resolved)
+        if self.resolve_schema and not self._resolved_schema:
             file_paths_only = [fp for fp, _ in files_with_dialects]
-            self._resolved_schema = self._extract_schemas(file_paths_only, dialect)
-            if self.catalog_type:
-                self._resolved_schema = self._fill_schema_from_catalog(
-                    self._resolved_schema, file_paths_only, dialect
-                )
-            console.print(
-                f"[blue]Schema resolved for "
-                f"{len(self._resolved_schema)} table(s)[/blue]"
-            )
+            self.extract_schemas(file_paths_only, dialect)
 
         total = len(files_with_dialects)
         description = "Pass 2: Analyzing lineage" if self.resolve_schema else "Parsing"
@@ -286,18 +277,9 @@ class GraphBuilder:
         if not file_paths:
             return self
 
-        # Two-pass schema resolution: extract schema from all files first
-        if self.resolve_schema:
-            console.print("[blue]Pass 1: Extracting schema from files[/blue]")
-            self._resolved_schema = self._extract_schemas(file_paths, dialect)
-            if self.catalog_type:
-                self._resolved_schema = self._fill_schema_from_catalog(
-                    self._resolved_schema, file_paths, dialect
-                )
-            console.print(
-                f"[blue]Schema resolved for "
-                f"{len(self._resolved_schema)} table(s)[/blue]"
-            )
+        # Two-pass schema resolution (skip if already resolved)
+        if self.resolve_schema and not self._resolved_schema:
+            self.extract_schemas(file_paths, dialect)
 
         if show_progress:
             total = len(file_paths)
@@ -320,6 +302,34 @@ class GraphBuilder:
             for file_path in file_paths:
                 self.add_file(file_path, dialect)
         return self
+
+    def extract_schemas(
+        self,
+        file_paths: List[Path],
+        dialect: Optional[str] = None,
+    ) -> Dict[str, Dict[str, str]]:
+        """Run schema extraction pass and optionally fill from catalog.
+
+        Call this before add_files/add_manifest to resolve schema upfront.
+        The resolved schema is stored internally and also returned.
+
+        Args:
+            file_paths: SQL files to extract schema from
+            dialect: SQL dialect override
+
+        Returns:
+            Resolved schema dict
+        """
+        console.print("[blue]Pass 1: Extracting schema from files[/blue]")
+        self._resolved_schema = self._extract_schemas(file_paths, dialect)
+        if self.catalog_type:
+            self._resolved_schema = self._fill_schema_from_catalog(
+                self._resolved_schema, file_paths, dialect
+            )
+        console.print(
+            f"[blue]Schema resolved for {len(self._resolved_schema)} table(s)[/blue]"
+        )
+        return self._resolved_schema.copy()
 
     def _extract_schemas(
         self,
