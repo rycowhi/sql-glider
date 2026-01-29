@@ -276,15 +276,15 @@ class LineageAnalyzer:
                     source_expr.this, exp.Star
                 ):
                     source_table = source_expr.table
-                    qualified_star_cols: List[str] = []
+                    dql_star_cols: List[str] = []
                     if source_table and first_select:
-                        qualified_star_cols = self._resolve_qualified_star(
+                        dql_star_cols = self._resolve_qualified_star(
                             source_table, first_select
                         )
-                        for col in qualified_star_cols:
+                        for col in dql_star_cols:
                             columns.append(col)
                             self._column_mapping[col] = col
-                    if not qualified_star_cols:
+                    if not dql_star_cols:
                         if self._no_star:
                             raise StarResolutionError(
                                 f"SELECT {source_table}.* could not be resolved "
