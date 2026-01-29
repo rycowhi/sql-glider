@@ -16,7 +16,7 @@ from sqlglider.graph.models import (
     LineageGraph,
     Manifest,
 )
-from sqlglider.lineage.analyzer import LineageAnalyzer
+from sqlglider.lineage.analyzer import LineageAnalyzer, SchemaResolutionError
 from sqlglider.utils.file_utils import read_sql_file
 from sqlglider.utils.schema import parse_ddl_to_schema
 
@@ -38,6 +38,7 @@ class GraphBuilder:
         resolve_schema: bool = False,
         catalog_type: Optional[str] = None,
         catalog_config: Optional[Dict[str, object]] = None,
+        strict_schema: bool = False,
     ):
         """
         Initialize the graph builder.
@@ -57,6 +58,8 @@ class GraphBuilder:
                 catalog for tables whose schema could not be inferred from files.
             catalog_config: Optional provider-specific configuration dict
                 passed to the catalog's configure() method.
+            strict_schema: If True, fail during schema extraction when an
+                unqualified column cannot be attributed to a table.
         """
         self.node_format = node_format
         self.dialect = dialect
@@ -65,6 +68,7 @@ class GraphBuilder:
         self.resolve_schema = resolve_schema
         self.catalog_type = catalog_type
         self.catalog_config = catalog_config
+        self.strict_schema = strict_schema
         self.graph: rx.PyDiGraph = rx.PyDiGraph()
         self._node_index_map: Dict[str, int] = {}  # identifier -> rustworkx node index
         self._source_files: Set[str] = set()
@@ -233,7 +237,7 @@ class GraphBuilder:
 
         # Two-pass schema resolution
         if self.resolve_schema:
-            console.print("[blue]Pass 1: Extracting schema from files...[/blue]")
+            console.print("[blue]Pass 1: Extracting schema from files[/blue]")
             file_paths_only = [fp for fp, _ in files_with_dialects]
             self._resolved_schema = self._extract_schemas(file_paths_only, dialect)
             if self.catalog_type:
@@ -284,7 +288,7 @@ class GraphBuilder:
 
         # Two-pass schema resolution: extract schema from all files first
         if self.resolve_schema:
-            console.print("[blue]Pass 1: Extracting schema from files...[/blue]")
+            console.print("[blue]Pass 1: Extracting schema from files[/blue]")
             self._resolved_schema = self._extract_schemas(file_paths, dialect)
             if self.catalog_type:
                 self._resolved_schema = self._fill_schema_from_catalog(
@@ -335,21 +339,37 @@ class GraphBuilder:
             Accumulated schema dict from all files
         """
         schema: Dict[str, Dict[str, str]] = {}
-        for file_path in file_paths:
-            file_dialect = dialect or self.dialect
-            try:
-                sql_content = read_sql_file(file_path)
-                if self.sql_preprocessor:
-                    sql_content = self.sql_preprocessor(sql_content, file_path)
-                analyzer = LineageAnalyzer(
-                    sql_content, dialect=file_dialect, schema=schema
-                )
-                file_schema = analyzer.extract_schema_only()
-                schema.update(file_schema)
-            except Exception:
-                # Schema extraction failures are non-fatal; the file
-                # will be reported during the lineage pass if it also fails.
-                pass
+        total = len(file_paths)
+        with Progress(
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            console=console,
+            transient=False,
+        ) as progress:
+            task = progress.add_task("Pass 1: Extracting schema", total=total)
+            for i, file_path in enumerate(file_paths, start=1):
+                console.print(f"Extracting schema {i}/{total}: {file_path.name}")
+                file_dialect = dialect or self.dialect
+                try:
+                    sql_content = read_sql_file(file_path)
+                    if self.sql_preprocessor:
+                        sql_content = self.sql_preprocessor(sql_content, file_path)
+                    analyzer = LineageAnalyzer(
+                        sql_content,
+                        dialect=file_dialect,
+                        schema=schema,
+                        strict_schema=self.strict_schema,
+                    )
+                    file_schema = analyzer.extract_schema_only()
+                    schema.update(file_schema)
+                except SchemaResolutionError:
+                    raise
+                except Exception:
+                    # Schema extraction failures are non-fatal; the file
+                    # will be reported during the lineage pass if it also fails.
+                    pass
+                progress.advance(task)
         return schema
 
     def _fill_schema_from_catalog(
@@ -503,6 +523,11 @@ class GraphBuilder:
     def node_index_map(self) -> Dict[str, int]:
         """Get mapping from node identifiers to rustworkx indices."""
         return self._node_index_map.copy()
+
+    @property
+    def resolved_schema(self) -> Dict[str, Dict[str, str]]:
+        """Get the resolved schema dictionary from schema extraction pass."""
+        return self._resolved_schema.copy()
 
     @property
     def skipped_files(self) -> List[tuple[str, str]]:

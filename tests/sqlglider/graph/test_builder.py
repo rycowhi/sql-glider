@@ -800,3 +800,45 @@ class TestResolveSchema:
         builder.add_files([sql_file])
         graph = builder.build()
         assert graph is not None
+
+
+class TestResolvedSchemaProperty:
+    """Tests for the resolved_schema property."""
+
+    def test_empty_without_resolve(self, tmp_path):
+        """resolved_schema is empty when resolve_schema is not used."""
+        sql_file = tmp_path / "query.sql"
+        sql_file.write_text("SELECT id FROM users;")
+        builder = GraphBuilder()
+        builder.add_file(sql_file)
+        assert builder.resolved_schema == {}
+
+    def test_populated_with_resolve_from_dql(self, tmp_path):
+        """resolved_schema infers table schemas from DQL column references."""
+        sql_file = tmp_path / "query.sql"
+        sql_file.write_text("SELECT c.id, c.name FROM customers c;")
+        builder = GraphBuilder(resolve_schema=True)
+        builder.add_files([sql_file])
+        schema = builder.resolved_schema
+        assert "customers" in schema
+        assert "id" in schema["customers"]
+        assert "name" in schema["customers"]
+
+    def test_populated_with_resolve_from_create(self, tmp_path):
+        """resolved_schema extracts from CREATE VIEW AS SELECT."""
+        sql_file = tmp_path / "ddl.sql"
+        sql_file.write_text(
+            "CREATE VIEW customers AS SELECT id, name FROM raw_customers;"
+        )
+        builder = GraphBuilder(resolve_schema=True)
+        builder.add_files([sql_file])
+        schema = builder.resolved_schema
+        assert "customers" in schema
+        assert "id" in schema["customers"]
+
+    def test_returns_copy(self, tmp_path):
+        """resolved_schema returns a copy, not the internal dict."""
+        builder = GraphBuilder()
+        schema = builder.resolved_schema
+        schema["injected"] = {"col": "UNKNOWN"}
+        assert "injected" not in builder.resolved_schema

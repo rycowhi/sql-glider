@@ -12,7 +12,7 @@ from sqlglot.errors import ParseError
 from typing_extensions import Annotated
 
 from sqlglider.global_models import AnalysisLevel, NodeFormat
-from sqlglider.lineage.analyzer import LineageAnalyzer
+from sqlglider.lineage.analyzer import LineageAnalyzer, SchemaResolutionError
 from sqlglider.lineage.formatters import (
     CsvFormatter,
     JsonFormatter,
@@ -1014,6 +1014,22 @@ def graph_build(
         help="Catalog provider for pulling DDL of tables not found in files "
         "(requires --resolve-schema). E.g. 'databricks'",
     ),
+    dump_schema: Optional[Path] = typer.Option(
+        None,
+        "--dump-schema",
+        help="Dump resolved schema to file (requires --resolve-schema)",
+    ),
+    dump_schema_format: Optional[str] = typer.Option(
+        None,
+        "--dump-schema-format",
+        help="Format for dumped schema: 'text' (default), 'json', or 'csv'",
+    ),
+    strict_schema: bool = typer.Option(
+        False,
+        "--strict-schema",
+        help="Fail if any column's table cannot be identified during schema extraction "
+        "(requires --resolve-schema)",
+    ),
 ) -> None:
     """
     Build a lineage graph from SQL files.
@@ -1050,9 +1066,31 @@ def graph_build(
     templater = templater or config.templater  # None means no templating
     no_star = no_star or config.no_star or False
     resolve_schema = resolve_schema or config.resolve_schema or False
+    strict_schema = strict_schema or config.strict_schema or False
+
+    if strict_schema and not resolve_schema:
+        err_console.print("[red]Error:[/red] --strict-schema requires --resolve-schema")
+        raise typer.Exit(1)
 
     if catalog_type and not resolve_schema:
         err_console.print("[red]Error:[/red] --catalog-type requires --resolve-schema")
+        raise typer.Exit(1)
+
+    # Resolve dump_schema options from config
+    dump_schema = dump_schema or (
+        Path(config.dump_schema) if config.dump_schema else None
+    )
+    dump_schema_format = dump_schema_format or config.dump_schema_format or "text"
+
+    if dump_schema and not resolve_schema:
+        err_console.print("[red]Error:[/red] --dump-schema requires --resolve-schema")
+        raise typer.Exit(1)
+
+    if dump_schema_format not in ("text", "json", "csv"):
+        err_console.print(
+            f"[red]Error:[/red] Invalid --dump-schema-format '{dump_schema_format}'. "
+            "Use 'text', 'json', or 'csv'."
+        )
         raise typer.Exit(1)
 
     # Only inherit catalog_type from config when resolve_schema is active
@@ -1125,6 +1163,7 @@ def graph_build(
             resolve_schema=resolve_schema,
             catalog_type=catalog_type,
             catalog_config=catalog_config_dict,
+            strict_schema=strict_schema,
         )
 
         # Process manifest if provided
@@ -1147,6 +1186,17 @@ def graph_build(
                     raise typer.Exit(1)
             builder.add_files(all_files, dialect=dialect)
 
+        # Dump resolved schema if requested
+        if dump_schema:
+            from sqlglider.graph.formatters import format_schema
+
+            schema_content = format_schema(builder.resolved_schema, dump_schema_format)
+            dump_schema.write_text(schema_content, encoding="utf-8")
+            console.print(
+                f"[green]Schema dumped to {dump_schema} "
+                f"({len(builder.resolved_schema)} table(s))[/green]"
+            )
+
         # Build and save graph
         graph = builder.build()
         save_graph(graph, output)
@@ -1155,6 +1205,10 @@ def graph_build(
             f"[green]Success:[/green] Graph saved to {output} "
             f"({graph.metadata.total_nodes} nodes, {graph.metadata.total_edges} edges)"
         )
+
+    except SchemaResolutionError as e:
+        err_console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
 
     except FileNotFoundError as e:
         err_console.print(f"[red]Error:[/red] {e}")

@@ -15,6 +15,10 @@ class StarResolutionError(Exception):
     """Raised when SELECT * cannot be resolved and no_star mode is enabled."""
 
 
+class SchemaResolutionError(Exception):
+    """Raised when a column's table cannot be identified and strict_schema is enabled."""
+
+
 class TableUsage(str, Enum):
     """How a table is used in a query."""
 
@@ -95,6 +99,7 @@ class LineageAnalyzer:
         dialect: str = "spark",
         no_star: bool = False,
         schema: Optional[Dict[str, Dict[str, str]]] = None,
+        strict_schema: bool = False,
     ):
         """
         Initialize the lineage analyzer.
@@ -106,6 +111,9 @@ class LineageAnalyzer:
             schema: Optional external schema mapping table names to column
                 definitions (e.g. {"table": {"col": "UNKNOWN"}}). File-derived
                 schema from CREATE statements will merge on top.
+            strict_schema: If True, fail during schema extraction when an
+                unqualified column cannot be attributed to a table (e.g.
+                in a multi-table SELECT without table qualifiers).
 
         Raises:
             ParseError: If the SQL cannot be parsed
@@ -113,6 +121,7 @@ class LineageAnalyzer:
         self.sql = sql
         self.dialect = dialect
         self._no_star = no_star
+        self._strict_schema = strict_schema
         self._skipped_queries: List[SkippedQuery] = []
         # File-scoped schema context for cross-statement lineage
         # Maps table/view names to their column definitions
@@ -149,12 +158,18 @@ class LineageAnalyzer:
     def extract_schema_only(self) -> Dict[str, Dict[str, str]]:
         """Parse all statements and extract schema without running lineage.
 
-        Iterates through all expressions, extracting schema from CREATE
-        TABLE/VIEW AS SELECT statements. Returns the accumulated schema dict.
+        Iterates through all expressions, extracting schema from:
+        1. CREATE TABLE/VIEW AS SELECT statements (existing behavior)
+        2. DQL statements by inferring table columns from qualified column
+           references (e.g., ``SELECT t.id FROM table t`` infers
+           ``table: {id: UNKNOWN}``)
+
+        Returns the accumulated schema dict.
         """
         self._file_schema = dict(self._initial_schema)
         for expr in self.expressions:
             self._extract_schema_from_statement(expr)
+            self._extract_schema_from_dql(expr)
         return dict(self._file_schema)
 
     def get_output_columns(self) -> List[str]:
@@ -1451,6 +1466,119 @@ class LineageAnalyzer:
         if columns:
             # Store with UNKNOWN type - SQLGlot only needs column names for expansion
             self._file_schema[target_name] = {col: "UNKNOWN" for col in columns}
+
+    def _extract_schema_from_dql(self, expr: exp.Expression) -> None:
+        """Infer table schemas from column references in DQL.
+
+        Walks SELECT statements and extracts table-column mappings from:
+        1. Qualified column references (e.g., ``c.id``) — always resolved.
+        2. Unqualified column references (e.g., ``id``) — only when the
+           SELECT has exactly one real table source (no joins), making
+           attribution unambiguous.
+
+        Aliases are resolved back to actual table names.  CTEs and subquery
+        aliases are skipped since they don't represent external tables.
+
+        Args:
+            expr: The SQL expression to extract schema from.
+        """
+        # Find all SELECT nodes in the expression tree
+        selects = list(expr.find_all(exp.Select))
+        if not selects:
+            return
+
+        for select_node in selects:
+            # Build alias-to-table mapping for this SELECT scope
+            alias_map: Dict[str, str] = {}
+            cte_names: Set[str] = set()
+
+            # Collect CTE names so we can skip them
+            parent = select_node
+            while parent:
+                with_clause = parent.args.get("with")
+                if with_clause:
+                    for cte in with_clause.expressions:
+                        if isinstance(cte, exp.CTE) and cte.alias:
+                            cte_names.add(cte.alias.lower())
+                parent = parent.parent if hasattr(parent, "parent") else None
+
+            # Collect subquery aliases so we can skip them too
+            subquery_aliases: Set[str] = set()
+            from_clause = select_node.args.get("from")
+            if from_clause and isinstance(from_clause, exp.From):
+                source = from_clause.this
+                if isinstance(source, exp.Subquery) and source.alias:
+                    subquery_aliases.add(source.alias.lower())
+            for join in select_node.find_all(exp.Join):
+                if isinstance(join.this, exp.Subquery) and join.this.alias:
+                    subquery_aliases.add(join.this.alias.lower())
+
+            # Build alias map from FROM/JOIN table references
+            real_tables: list[str] = []  # track non-CTE, non-subquery tables
+            for table_ref in select_node.find_all(exp.Table):
+                # Skip tables inside nested selects — they belong to inner scope
+                if table_ref.find_ancestor(exp.Select) is not select_node:
+                    continue
+                qualified = self._get_qualified_table_name(table_ref)
+                if table_ref.alias:
+                    alias_map[table_ref.alias.lower()] = qualified
+                else:
+                    alias_map[table_ref.name.lower()] = qualified
+                # Track real tables (not CTEs or subqueries)
+                if (
+                    qualified.lower() not in cte_names
+                    and qualified.lower() not in subquery_aliases
+                ):
+                    real_tables.append(qualified)
+
+            # Determine single-table target for unqualified columns
+            # Only set when exactly one real table source exists (unambiguous)
+            single_table: Optional[str] = (
+                real_tables[0] if len(real_tables) == 1 else None
+            )
+
+            # Walk all column references in this SELECT
+            for column in select_node.find_all(exp.Column):
+                if isinstance(column.this, exp.Star):
+                    continue
+
+                table_ref_name = column.table
+                col_name = column.name
+
+                if table_ref_name:
+                    # Qualified column — resolve alias to actual table
+                    ref_lower = table_ref_name.lower()
+
+                    # Skip CTE and subquery references
+                    if ref_lower in cte_names or ref_lower in subquery_aliases:
+                        continue
+
+                    actual_table = alias_map.get(ref_lower)
+                    if not actual_table:
+                        continue
+
+                    # Skip if it resolved to a CTE or subquery
+                    if (
+                        actual_table.lower() in cte_names
+                        or actual_table.lower() in subquery_aliases
+                    ):
+                        continue
+                else:
+                    # Unqualified column — attribute to single table if unambiguous
+                    if not single_table:
+                        if self._strict_schema:
+                            preview = select_node.sql(dialect=self.dialect)[:80]
+                            raise SchemaResolutionError(
+                                f"Cannot resolve table for unqualified column "
+                                f"'{col_name}' in multi-table query: {preview}"
+                            )
+                        continue
+                    actual_table = single_table
+
+                if actual_table not in self._file_schema:
+                    self._file_schema[actual_table] = {}
+                if col_name not in self._file_schema[actual_table]:
+                    self._file_schema[actual_table][col_name] = "UNKNOWN"
 
     def _extract_columns_from_select(
         self, select_node: Union[exp.Select, exp.Union, exp.Intersect, exp.Except]

@@ -62,6 +62,9 @@ class ConfigSettings(BaseModel):
     catalog: Optional[CatalogConfig] = None
     no_star: Optional[bool] = None
     resolve_schema: Optional[bool] = None
+    dump_schema: Optional[str] = None
+    dump_schema_format: Optional[str] = None
+    strict_schema: Optional[bool] = None
 
 
 def find_config_file(start_path: Optional[Path] = None) -> Optional[Path]:

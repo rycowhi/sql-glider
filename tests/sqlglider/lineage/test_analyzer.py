@@ -3055,6 +3055,77 @@ class TestSchemaParam:
         assert "v2" in schema
         assert set(schema["v2"].keys()) == {"code"}
 
+    def test_extract_schema_from_dql(self):
+        """extract_schema_only infers schemas from qualified column refs in DQL."""
+        sql = "SELECT c.id, c.name, o.total FROM customers c JOIN orders o ON c.id = o.customer_id;"
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        schema = analyzer.extract_schema_only()
+        assert "customers" in schema
+        assert set(schema["customers"].keys()) == {"id", "name"}
+        assert "orders" in schema
+        assert set(schema["orders"].keys()) == {"total", "customer_id"}
+
+    def test_extract_schema_from_dql_skips_ctes(self):
+        """DQL schema inference does not add CTE aliases as table schemas."""
+        sql = """
+        WITH cte AS (SELECT r.id FROM raw_table r)
+        SELECT c.id FROM cte c;
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        schema = analyzer.extract_schema_only()
+        # CTE 'cte' should not appear as a table schema
+        assert "cte" not in schema
+        # raw_table should appear from the CTE's inner qualified ref
+        assert "raw_table" in schema
+        assert "id" in schema["raw_table"]
+
+    def test_extract_schema_from_dql_unqualified_single_table(self):
+        """Unqualified columns are attributed when there's exactly one table."""
+        sql = "SELECT id, name FROM customers;"
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        schema = analyzer.extract_schema_only()
+        assert "customers" in schema
+        assert set(schema["customers"].keys()) == {"id", "name"}
+
+    def test_extract_schema_from_dql_unqualified_multi_table_ignored(self):
+        """Unqualified columns are skipped when there are multiple tables."""
+        sql = "SELECT id, name FROM customers JOIN orders ON customers.id = orders.cid;"
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        schema = analyzer.extract_schema_only()
+        # Qualified refs from ON clause should be captured
+        assert "customers" in schema
+        assert "id" in schema["customers"]
+        assert "orders" in schema
+        assert "cid" in schema["orders"]
+        # Unqualified 'name' should NOT appear (ambiguous with 2 tables)
+        for table_cols in schema.values():
+            assert "name" not in table_cols
+
+    def test_strict_schema_raises_on_ambiguous_column(self):
+        """strict_schema raises SchemaResolutionError for unqualified columns in joins."""
+        from sqlglider.lineage.analyzer import SchemaResolutionError
+
+        sql = "SELECT id, name FROM customers JOIN orders ON customers.id = orders.cid;"
+        analyzer = LineageAnalyzer(sql, dialect="spark", strict_schema=True)
+        with pytest.raises(SchemaResolutionError, match="Cannot resolve table"):
+            analyzer.extract_schema_only()
+
+    def test_strict_schema_ok_with_single_table(self):
+        """strict_schema does not raise for unqualified columns with one table."""
+        sql = "SELECT id, name FROM customers;"
+        analyzer = LineageAnalyzer(sql, dialect="spark", strict_schema=True)
+        schema = analyzer.extract_schema_only()
+        assert "customers" in schema
+        assert set(schema["customers"].keys()) == {"id", "name"}
+
+    def test_strict_schema_ok_with_qualified_columns(self):
+        """strict_schema does not raise when all columns are qualified."""
+        sql = "SELECT c.id, o.name FROM customers c JOIN orders o ON c.id = o.cid;"
+        analyzer = LineageAnalyzer(sql, dialect="spark", strict_schema=True)
+        schema = analyzer.extract_schema_only()
+        assert "customers" in schema
+        assert "orders" in schema
+
     def test_get_extracted_schema_after_analysis(self):
         sql = "CREATE VIEW v1 AS SELECT id, name FROM t1;"
         analyzer = LineageAnalyzer(sql, dialect="spark")

@@ -692,6 +692,178 @@ class TestGraphBuildCommand:
             assert result.exit_code == 1
             assert "Invalid node format" in result.output
 
+    def test_dump_schema_without_resolve_schema_errors(self, sample_sql_file, tmp_path):
+        """Test error when --dump-schema is used without --resolve-schema."""
+        output_path = tmp_path / "graph.json"
+        schema_path = tmp_path / "schema.json"
+
+        result = runner.invoke(
+            app,
+            [
+                "graph",
+                "build",
+                str(sample_sql_file),
+                "-o",
+                str(output_path),
+                "--dump-schema",
+                str(schema_path),
+            ],
+        )
+
+        assert result.exit_code == 1
+        assert "--dump-schema requires --resolve-schema" in result.output
+
+    def test_dump_schema_writes_file(self, tmp_path):
+        """Test --dump-schema writes resolved schema to file."""
+        sql_file = tmp_path / "query.sql"
+        sql_file.write_text("SELECT c.id, c.name FROM customers c;")
+        output_path = tmp_path / "graph.json"
+        schema_path = tmp_path / "schema.txt"
+
+        result = runner.invoke(
+            app,
+            [
+                "graph",
+                "build",
+                str(sql_file),
+                "-o",
+                str(output_path),
+                "--resolve-schema",
+                "--dump-schema",
+                str(schema_path),
+            ],
+        )
+
+        assert result.exit_code == 0
+        assert schema_path.exists()
+        content = schema_path.read_text()
+        assert "customers" in content
+
+    def test_dump_schema_json_format(self, tmp_path):
+        """Test --dump-schema with JSON format."""
+        import json
+
+        sql_file = tmp_path / "query.sql"
+        sql_file.write_text("SELECT u.id, u.email FROM users u;")
+        output_path = tmp_path / "graph.json"
+        schema_path = tmp_path / "schema.json"
+
+        result = runner.invoke(
+            app,
+            [
+                "graph",
+                "build",
+                str(sql_file),
+                "-o",
+                str(output_path),
+                "--resolve-schema",
+                "--dump-schema",
+                str(schema_path),
+                "--dump-schema-format",
+                "json",
+            ],
+        )
+
+        assert result.exit_code == 0
+        parsed = json.loads(schema_path.read_text())
+        assert "users" in parsed
+
+    def test_dump_schema_csv_format(self, tmp_path):
+        """Test --dump-schema with CSV format."""
+        sql_file = tmp_path / "query.sql"
+        sql_file.write_text("SELECT u.id, u.email FROM users u;")
+        output_path = tmp_path / "graph.json"
+        schema_path = tmp_path / "schema.csv"
+
+        result = runner.invoke(
+            app,
+            [
+                "graph",
+                "build",
+                str(sql_file),
+                "-o",
+                str(output_path),
+                "--resolve-schema",
+                "--dump-schema",
+                str(schema_path),
+                "--dump-schema-format",
+                "csv",
+            ],
+        )
+
+        assert result.exit_code == 0
+        content = schema_path.read_text()
+        assert "table,column,type" in content
+        assert "users" in content
+
+    def test_strict_schema_without_resolve_schema_errors(
+        self, sample_sql_file, tmp_path
+    ):
+        """Test error when --strict-schema is used without --resolve-schema."""
+        output_path = tmp_path / "graph.json"
+
+        result = runner.invoke(
+            app,
+            [
+                "graph",
+                "build",
+                str(sample_sql_file),
+                "-o",
+                str(output_path),
+                "--strict-schema",
+            ],
+        )
+
+        assert result.exit_code == 1
+        assert "--strict-schema requires --resolve-schema" in result.output
+
+    def test_strict_schema_fails_on_ambiguous_column(self, tmp_path):
+        """Test --strict-schema fails when unqualified columns are ambiguous."""
+        sql_file = tmp_path / "query.sql"
+        sql_file.write_text(
+            "SELECT id, name FROM customers JOIN orders ON customers.id = orders.cid;"
+        )
+        output_path = tmp_path / "graph.json"
+
+        result = runner.invoke(
+            app,
+            [
+                "graph",
+                "build",
+                str(sql_file),
+                "-o",
+                str(output_path),
+                "--resolve-schema",
+                "--strict-schema",
+            ],
+        )
+
+        assert result.exit_code == 1
+        assert "Cannot resolve table" in result.output
+
+    def test_strict_schema_passes_with_qualified_columns(self, tmp_path):
+        """Test --strict-schema passes when all columns are qualified."""
+        sql_file = tmp_path / "query.sql"
+        sql_file.write_text(
+            "SELECT c.id, o.name FROM customers c JOIN orders o ON c.id = o.cid;"
+        )
+        output_path = tmp_path / "graph.json"
+
+        result = runner.invoke(
+            app,
+            [
+                "graph",
+                "build",
+                str(sql_file),
+                "-o",
+                str(output_path),
+                "--resolve-schema",
+                "--strict-schema",
+            ],
+        )
+
+        assert result.exit_code == 0
+
 
 class TestGraphMergeCommand:
     """Tests for the graph merge command."""
