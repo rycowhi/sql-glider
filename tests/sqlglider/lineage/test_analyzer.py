@@ -3,7 +3,11 @@
 import pytest
 
 from sqlglider.global_models import AnalysisLevel
-from sqlglider.lineage.analyzer import LineageAnalyzer, StarResolutionError
+from sqlglider.lineage.analyzer import (
+    LineageAnalyzer,
+    StarResolutionError,
+    _flat_schema_to_nested,
+)
 
 
 class TestCaseInsensitiveForwardLineage:
@@ -3181,3 +3185,97 @@ class TestSchemaPruning:
         output_names = {item.output_name for r in results for item in r.lineage_items}
         assert "id" in output_names
         assert "email" in output_names
+
+
+class TestFlatSchemaToNested:
+    """Tests for _flat_schema_to_nested conversion utility."""
+
+    def test_empty(self):
+        assert _flat_schema_to_nested({}) == {}
+
+    def test_unqualified_passthrough(self):
+        schema = {"users": {"id": "UNKNOWN"}}
+        assert _flat_schema_to_nested(schema) == schema
+
+    def test_two_part_keys(self):
+        schema = {"db.users": {"id": "UNKNOWN"}}
+        result = _flat_schema_to_nested(schema)
+        assert result == {"db": {"users": {"id": "UNKNOWN"}}}
+
+    def test_three_part_keys(self):
+        schema = {"cat.db.users": {"id": "UNKNOWN"}}
+        result = _flat_schema_to_nested(schema)
+        assert result == {"cat": {"db": {"users": {"id": "UNKNOWN"}}}}
+
+    def test_mixed_depth_pads_shorter_keys(self):
+        schema = {
+            "my_view": {"x": "UNKNOWN"},
+            "db.users": {"id": "UNKNOWN"},
+        }
+        result = _flat_schema_to_nested(schema)
+        assert result == {
+            "": {"my_view": {"x": "UNKNOWN"}},
+            "db": {"users": {"id": "UNKNOWN"}},
+        }
+
+
+class TestQualifiedSchemaKeys:
+    """Tests for schema with qualified (dotted) table names."""
+
+    def test_qualified_star_expansion(self):
+        """SELECT * resolves correctly with qualified schema keys."""
+        sql = "SELECT * FROM mydb.users"
+        schema = {"mydb.users": {"id": "UNKNOWN", "name": "UNKNOWN"}}
+        analyzer = LineageAnalyzer(sql, dialect="spark", schema=schema)
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
+        items = {
+            (item.source_name, item.output_name)
+            for r in results
+            for item in r.lineage_items
+        }
+        assert ("mydb.users.id", "id") in items
+        assert ("mydb.users.name", "name") in items
+
+    def test_qualified_explicit_columns(self):
+        """Explicit columns trace sources correctly with qualified schema keys."""
+        sql = "SELECT id, name FROM mydb.users"
+        schema = {"mydb.users": {"id": "UNKNOWN", "name": "UNKNOWN"}}
+        analyzer = LineageAnalyzer(sql, dialect="spark", schema=schema)
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
+        items = {
+            (item.source_name, item.output_name)
+            for r in results
+            for item in r.lineage_items
+        }
+        assert ("mydb.users.id", "mydb.users.id") in items
+        assert ("mydb.users.name", "mydb.users.name") in items
+
+    def test_three_part_qualified(self):
+        """3-part qualified names (catalog.db.table) work correctly."""
+        sql = "SELECT id FROM catalog.mydb.users"
+        schema = {"catalog.mydb.users": {"id": "UNKNOWN"}}
+        analyzer = LineageAnalyzer(sql, dialect="spark", schema=schema)
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
+        items = [
+            (item.source_name, item.output_name)
+            for r in results
+            for item in r.lineage_items
+        ]
+        assert len(items) == 1
+        assert items[0] == ("catalog.mydb.users.id", "catalog.mydb.users.id")
+
+    def test_mixed_qualified_and_unqualified(self):
+        """Mix of qualified and unqualified table names in schema."""
+        sql = "SELECT * FROM my_view"
+        schema = {
+            "my_view": {"id": "UNKNOWN"},
+            "mydb.users": {"id": "UNKNOWN", "name": "UNKNOWN"},
+        }
+        analyzer = LineageAnalyzer(sql, dialect="spark", schema=schema)
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
+        items = {
+            (item.source_name, item.output_name)
+            for r in results
+            for item in r.lineage_items
+        }
+        assert ("my_view.id", "id") in items

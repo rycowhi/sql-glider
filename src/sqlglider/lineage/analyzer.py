@@ -11,6 +11,48 @@ from sqlglot.lineage import Node, lineage
 from sqlglider.global_models import AnalysisLevel
 
 
+def _flat_schema_to_nested(
+    schema: Dict[str, Dict[str, str]],
+) -> Dict[str, object]:
+    """Convert flat dot-notation schema keys to the nested dict structure sqlglot expects.
+
+    sqlglot's MappingSchema requires consistent nesting depth across all tables.
+    Flat keys like ``"db.table"`` are split on dots and nested accordingly.
+    Shorter keys are padded with empty-string prefixes to match the max depth.
+
+    Examples::
+
+        {"users": {"id": "UNKNOWN"}}
+        → {"users": {"id": "UNKNOWN"}}  (depth 1, no change)
+
+        {"db.users": {"id": "UNKNOWN"}, "my_view": {"x": "UNKNOWN"}}
+        → {"db": {"users": {"id": "UNKNOWN"}}, "": {"my_view": {"x": "UNKNOWN"}}}
+    """
+    if not schema:
+        return {}
+
+    # Split all keys into parts
+    entries = [(key.split("."), cols) for key, cols in schema.items()]
+    max_depth = max(len(parts) for parts, _ in entries)
+
+    # If all keys are single-part (unqualified), return as-is
+    if max_depth == 1:
+        return schema  # type: ignore[return-value]
+
+    # Pad shorter keys with empty-string prefixes to match max depth
+    nested: Dict[str, object] = {}
+    for parts, cols in entries:
+        while len(parts) < max_depth:
+            parts.insert(0, "")
+        d: Dict[str, object] = nested
+        for part in parts[:-1]:
+            if part not in d:
+                d[part] = {}
+            d = d[part]  # type: ignore[assignment]
+        d[parts[-1]] = cols
+    return nested
+
+
 class StarResolutionError(Exception):
     """Raised when SELECT * cannot be resolved and no_star mode is enabled."""
 
@@ -860,8 +902,10 @@ class LineageAnalyzer:
             current_query_sql = self.expr.sql(dialect=self.dialect)
 
         # Prune schema to only tables referenced in this query to avoid
-        # sqlglot.lineage() performance degradation with large schema dicts
-        pruned_schema: Optional[Dict[str, Dict[str, str]]] = None
+        # sqlglot.lineage() performance degradation with large schema dicts.
+        # Then convert from flat dot-notation keys to the nested dict structure
+        # that sqlglot's MappingSchema expects.
+        lineage_schema: Optional[Dict[str, object]] = None
         if self._file_schema:
             referenced = {t.lower() for t in self._get_query_tables()}
             pruned_schema = {
@@ -869,8 +913,8 @@ class LineageAnalyzer:
                 for table, cols in self._file_schema.items()
                 if table.lower() in referenced
             }
-            if not pruned_schema:
-                pruned_schema = None
+            if pruned_schema:
+                lineage_schema = _flat_schema_to_nested(pruned_schema)
 
         for col in columns_to_analyze:
             try:
@@ -883,7 +927,7 @@ class LineageAnalyzer:
                     lineage_col,
                     current_query_sql,
                     dialect=self.dialect,
-                    schema=pruned_schema,
+                    schema=lineage_schema,
                 )
 
                 # Collect all source columns
