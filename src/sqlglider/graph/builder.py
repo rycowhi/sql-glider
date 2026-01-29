@@ -33,6 +33,7 @@ class GraphBuilder:
         node_format: NodeFormat = NodeFormat.QUALIFIED,
         dialect: str = "spark",
         sql_preprocessor: Optional[SqlPreprocessor] = None,
+        no_star: bool = False,
     ):
         """
         Initialize the graph builder.
@@ -43,10 +44,12 @@ class GraphBuilder:
             sql_preprocessor: Optional function to preprocess SQL before analysis.
                              Takes (sql: str, file_path: Path) and returns processed SQL.
                              Useful for templating (e.g., Jinja2 rendering).
+            no_star: If True, fail when SELECT * cannot be resolved to columns
         """
         self.node_format = node_format
         self.dialect = dialect
         self.sql_preprocessor = sql_preprocessor
+        self.no_star = no_star
         self.graph: rx.PyDiGraph = rx.PyDiGraph()
         self._node_index_map: Dict[str, int] = {}  # identifier -> rustworkx node index
         self._source_files: Set[str] = set()
@@ -82,7 +85,9 @@ class GraphBuilder:
             if self.sql_preprocessor:
                 sql_content = self.sql_preprocessor(sql_content, file_path)
 
-            analyzer = LineageAnalyzer(sql_content, dialect=file_dialect)
+            analyzer = LineageAnalyzer(
+                sql_content, dialect=file_dialect, no_star=self.no_star
+            )
             results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
 
             # Print warnings for any skipped queries within the file

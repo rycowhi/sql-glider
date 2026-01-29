@@ -3,7 +3,7 @@
 import pytest
 
 from sqlglider.global_models import AnalysisLevel
-from sqlglider.lineage.analyzer import LineageAnalyzer
+from sqlglider.lineage.analyzer import LineageAnalyzer, StarResolutionError
 
 
 class TestCaseInsensitiveForwardLineage:
@@ -2897,6 +2897,27 @@ class TestCacheTableStatements:
         assert "orders" in tables_by_name
         assert tables_by_name["orders"].usage.value == "INPUT"
 
+    def test_cache_table_with_inline_subquery_alias(self):
+        """CACHE TABLE with an aliased inline subquery should trace through to sources."""
+        sql = """
+        CACHE TABLE cached_result AS
+        SELECT s.customer_id, s.order_total
+        FROM (
+            SELECT c.id as customer_id, o.total as order_total
+            FROM customers c
+            JOIN orders o ON c.id = o.customer_id
+        ) s
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
+
+        assert len(results) == 1
+        items = {
+            item.output_name: item.source_name for item in results[0].lineage_items
+        }
+        assert items["cached_result.customer_id"] == "customers.id"
+        assert items["cached_result.order_total"] == "orders.total"
+
     def test_bare_cache_table_is_skipped(self):
         """CACHE TABLE t (without AS SELECT) should be skipped."""
         sql = "CACHE TABLE my_table"
@@ -2923,3 +2944,58 @@ class TestCacheTableStatements:
         skipped = analyzer.skipped_queries
         assert len(skipped) == 1
         assert "DELETE" in skipped[0].statement_type
+
+
+class TestNoStar:
+    """Tests for the --no-star flag that fails on unresolvable SELECT *."""
+
+    def test_bare_star_no_star_raises(self):
+        """SELECT * from unknown table should raise with no_star=True."""
+        sql = "SELECT * FROM some_table"
+        analyzer = LineageAnalyzer(sql, dialect="spark", no_star=True)
+        with pytest.raises(
+            StarResolutionError, match="SELECT \\* could not be resolved"
+        ):
+            analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
+
+    def test_qualified_star_no_star_raises(self):
+        """SELECT t.* from unknown table should raise with no_star=True."""
+        sql = "SELECT t.* FROM some_table t"
+        analyzer = LineageAnalyzer(sql, dialect="spark", no_star=True)
+        with pytest.raises(
+            StarResolutionError, match="SELECT t\\.\\* could not be resolved"
+        ):
+            analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
+
+    def test_bare_star_default_falls_back(self):
+        """SELECT * without no_star should fall back to table.*."""
+        sql = "SELECT * FROM some_table"
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
+        assert len(results) == 1
+        output_names = [item.output_name for item in results[0].lineage_items]
+        assert any("*" in name for name in output_names)
+
+    def test_resolvable_star_with_no_star_succeeds(self):
+        """SELECT * from CTE should work with no_star=True since columns are known."""
+        sql = """
+        WITH cte AS (SELECT 1 AS id, 'alice' AS name)
+        SELECT * FROM cte
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark", no_star=True)
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
+        assert len(results) == 1
+        output_names = [item.output_name for item in results[0].lineage_items]
+        assert not any("*" in name for name in output_names)
+
+    def test_resolvable_qualified_star_with_no_star_succeeds(self):
+        """SELECT t.* from CTE should work with no_star=True since columns are known."""
+        sql = """
+        WITH cte AS (SELECT 1 AS id, 'alice' AS name)
+        SELECT cte.* FROM cte
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark", no_star=True)
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
+        assert len(results) == 1
+        output_names = [item.output_name for item in results[0].lineage_items]
+        assert not any("*" in name for name in output_names)

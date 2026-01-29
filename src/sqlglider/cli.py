@@ -166,6 +166,11 @@ def lineage(
         exists=True,
         help="Path to variables file (JSON or YAML)",
     ),
+    no_star: bool = typer.Option(
+        False,
+        "--no-star",
+        help="Fail if SELECT * cannot be resolved to actual columns",
+    ),
 ) -> None:
     """
     Analyze column or table lineage for a SQL file.
@@ -207,6 +212,7 @@ def lineage(
     level_str = level or config.level or "column"
     output_format = output_format or config.output_format or "text"
     templater = templater or config.templater  # None means no templating
+    no_star = no_star or config.no_star or False
     # Validate and convert level to enum
     try:
         analysis_level = AnalysisLevel(level_str)
@@ -261,7 +267,7 @@ def lineage(
         )
 
         # Create analyzer
-        analyzer = LineageAnalyzer(sql, dialect=dialect)
+        analyzer = LineageAnalyzer(sql, dialect=dialect, no_star=no_star)
 
         # Unified lineage analysis (handles both single and multi-query files)
         results = analyzer.analyze_queries(
@@ -990,6 +996,11 @@ def graph_build(
         exists=True,
         help="Path to variables file (JSON or YAML)",
     ),
+    no_star: bool = typer.Option(
+        False,
+        "--no-star",
+        help="Fail if SELECT * cannot be resolved to actual columns",
+    ),
 ) -> None:
     """
     Build a lineage graph from SQL files.
@@ -1024,6 +1035,7 @@ def graph_build(
     config = load_config()
     dialect = dialect or config.dialect or "spark"
     templater = templater or config.templater  # None means no templating
+    no_star = no_star or config.no_star or False
 
     # Validate and convert node format to enum
     try:
@@ -1080,6 +1092,7 @@ def graph_build(
             node_format=node_format_enum,
             dialect=dialect,
             sql_preprocessor=sql_preprocessor,
+            no_star=no_star,
         )
 
         # Process manifest if provided

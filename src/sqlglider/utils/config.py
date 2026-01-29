@@ -60,6 +60,7 @@ class ConfigSettings(BaseModel):
     catalog_type: Optional[str] = None
     ddl_folder: Optional[str] = None
     catalog: Optional[CatalogConfig] = None
+    no_star: Optional[bool] = None
 
 
 def find_config_file(start_path: Optional[Path] = None) -> Optional[Path]:

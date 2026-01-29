@@ -11,6 +11,10 @@ from sqlglot.lineage import Node, lineage
 from sqlglider.global_models import AnalysisLevel
 
 
+class StarResolutionError(Exception):
+    """Raised when SELECT * cannot be resolved and no_star mode is enabled."""
+
+
 class TableUsage(str, Enum):
     """How a table is used in a query."""
 
@@ -85,19 +89,21 @@ WarningCallback = Callable[[str], None]
 class LineageAnalyzer:
     """Analyze column and table lineage for SQL queries."""
 
-    def __init__(self, sql: str, dialect: str = "spark"):
+    def __init__(self, sql: str, dialect: str = "spark", no_star: bool = False):
         """
         Initialize the lineage analyzer.
 
         Args:
             sql: SQL query string to analyze (can contain multiple statements)
             dialect: SQL dialect (default: spark)
+            no_star: If True, fail when SELECT * cannot be resolved to columns
 
         Raises:
             ParseError: If the SQL cannot be parsed
         """
         self.sql = sql
         self.dialect = dialect
+        self._no_star = no_star
         self._skipped_queries: List[SkippedQuery] = []
         # File-scoped schema context for cross-statement lineage
         # Maps table/view names to their column definitions
@@ -171,6 +177,12 @@ class LineageAnalyzer:
                             columns.append(qualified_name)
                             self._column_mapping[qualified_name] = star_col
                     if not columns:
+                        if self._no_star:
+                            raise StarResolutionError(
+                                f"SELECT * could not be resolved to columns "
+                                f"for target table '{target_table}'. "
+                                f"Provide schema context or avoid using SELECT *."
+                            )
                         # Fallback: can't resolve *, use * as column name
                         qualified_name = f"{target_table}.*"
                         columns.append(qualified_name)
@@ -200,6 +212,12 @@ class LineageAnalyzer:
                                 columns.append(qualified_name)
                                 self._column_mapping[qualified_name] = col
                         if not qualified_star_cols:
+                            if self._no_star:
+                                raise StarResolutionError(
+                                    f"SELECT {source_table}.* could not be resolved "
+                                    f"to columns for target table '{target_table}'. "
+                                    f"Provide schema context or avoid using SELECT *."
+                                )
                             # Fallback: can't resolve t.*, use * as column name
                             qualified_name = f"{target_table}.*"
                             columns.append(qualified_name)
@@ -226,6 +244,23 @@ class LineageAnalyzer:
             # Get the first SELECT for table resolution (handles UNION case)
             first_select = self._get_first_select(select_node)
             for projection in projections:
+                # Handle SELECT * in DQL context
+                if isinstance(projection, exp.Star):
+                    if first_select:
+                        star_columns = self._resolve_star_columns(first_select)
+                        for star_col in star_columns:
+                            columns.append(star_col)
+                            self._column_mapping[star_col] = star_col
+                    if not columns:
+                        if self._no_star:
+                            raise StarResolutionError(
+                                "SELECT * could not be resolved to columns. "
+                                "Provide schema context or avoid using SELECT *."
+                            )
+                        columns.append("*")
+                        self._column_mapping["*"] = "*"
+                    continue
+
                 # Get the underlying expression (unwrap alias if present)
                 if isinstance(projection, exp.Alias):
                     source_expr = projection.this
@@ -235,6 +270,30 @@ class LineageAnalyzer:
                     source_expr = projection
                     column_name = None
                     lineage_name = None
+
+                # Handle table-qualified star in DQL context (e.g., t.*)
+                if isinstance(source_expr, exp.Column) and isinstance(
+                    source_expr.this, exp.Star
+                ):
+                    source_table = source_expr.table
+                    qualified_star_cols: List[str] = []
+                    if source_table and first_select:
+                        qualified_star_cols = self._resolve_qualified_star(
+                            source_table, first_select
+                        )
+                        for col in qualified_star_cols:
+                            columns.append(col)
+                            self._column_mapping[col] = col
+                    if not qualified_star_cols:
+                        if self._no_star:
+                            raise StarResolutionError(
+                                f"SELECT {source_table}.* could not be resolved "
+                                f"to columns. "
+                                f"Provide schema context or avoid using SELECT *."
+                            )
+                        columns.append("*")
+                        self._column_mapping["*"] = "*"
+                    continue
 
                 # Try to extract fully qualified name
                 if isinstance(source_expr, exp.Column):
@@ -407,6 +466,8 @@ class LineageAnalyzer:
                         level=level,
                     )
                 )
+            except StarResolutionError:
+                raise
             except ValueError as e:
                 # Unsupported statement type - track it and continue
                 stmt_type = self._get_statement_type(expr)
