@@ -2826,7 +2826,7 @@ class TestCacheTableStatements:
     """Tests for Spark SQL CACHE TABLE statement support."""
 
     def test_cache_table_as_select_column_lineage(self):
-        """CACHE TABLE t AS SELECT should produce lineage with t as target."""
+        """CACHE TABLE t AS SELECT should trace columns through to sources."""
         sql = """
         CACHE TABLE cached_customers AS
         SELECT customer_id, customer_name FROM customers
@@ -2835,10 +2835,27 @@ class TestCacheTableStatements:
         results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
 
         assert len(results) == 1
-        output_names = [item.output_name for item in results[0].lineage_items]
-        assert any("cached_customers" in name for name in output_names)
-        assert any("customer_id" in name for name in output_names)
-        assert any("customer_name" in name for name in output_names)
+        items = {
+            item.output_name: item.source_name for item in results[0].lineage_items
+        }
+        assert items["cached_customers.customer_id"] == "customers.customer_id"
+        assert items["cached_customers.customer_name"] == "customers.customer_name"
+
+    def test_cache_lazy_table_column_lineage(self):
+        """CACHE LAZY TABLE should trace columns identically to CACHE TABLE."""
+        sql = """
+        CACHE LAZY TABLE cached_customers AS
+        SELECT customer_id, customer_name FROM customers
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
+
+        assert len(results) == 1
+        items = {
+            item.output_name: item.source_name for item in results[0].lineage_items
+        }
+        assert items["cached_customers.customer_id"] == "customers.customer_id"
+        assert items["cached_customers.customer_name"] == "customers.customer_name"
 
     def test_cache_table_as_select_table_extraction(self):
         """CACHE TABLE t AS SELECT should show cached_orders as OUTPUT table."""

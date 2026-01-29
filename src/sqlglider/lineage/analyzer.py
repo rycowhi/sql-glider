@@ -751,7 +751,12 @@ class LineageAnalyzer:
 
         lineage_items = []
         # Get SQL for current expression only (not full multi-query SQL)
-        current_query_sql = self.expr.sql(dialect=self.dialect)
+        # For CACHE TABLE, pass just the SELECT since sqlglot.lineage doesn't
+        # natively understand CACHE statements
+        if isinstance(self.expr, exp.Cache) and self.expr.expression:
+            current_query_sql = self.expr.expression.sql(dialect=self.dialect)
+        else:
+            current_query_sql = self.expr.sql(dialect=self.dialect)
 
         for col in columns_to_analyze:
             try:
