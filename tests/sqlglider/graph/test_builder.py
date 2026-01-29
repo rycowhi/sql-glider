@@ -1,6 +1,7 @@
 """Tests for GraphBuilder class."""
 
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -631,3 +632,171 @@ class TestGraphBuilderCaseInsensitive:
         # All keys in the node index map should be lowercase
         for key in builder.node_index_map:
             assert key == key.lower(), f"Node index map key '{key}' is not lowercase"
+
+
+class TestResolveSchema:
+    """Tests for --resolve-schema two-pass schema resolution."""
+
+    def test_cross_file_star_resolution(self, tmp_path):
+        """Schema from file A's CREATE VIEW enables star resolution in file B."""
+        file_a = tmp_path / "a_create_view.sql"
+        file_a.write_text(
+            "CREATE VIEW customer_summary AS "
+            "SELECT customer_id, customer_name FROM customers;"
+        )
+        file_b = tmp_path / "b_use_view.sql"
+        file_b.write_text("SELECT * FROM customer_summary;")
+
+        builder = GraphBuilder(resolve_schema=True)
+        builder.add_files([file_a, file_b])
+        graph = builder.build()
+
+        node_ids = {n.identifier for n in graph.nodes}
+        # Star should have been expanded to actual columns
+        assert "customer_summary.customer_id" in node_ids
+        assert "customer_summary.customer_name" in node_ids
+        # Should NOT have a wildcard placeholder
+        assert "customer_summary.*" not in node_ids
+
+    def test_cross_file_star_resolution_reverse_order(self, tmp_path):
+        """Order doesn't matter — file B processed before file A still works."""
+        file_a = tmp_path / "z_create_view.sql"  # sorted last
+        file_a.write_text(
+            "CREATE VIEW customer_summary AS "
+            "SELECT customer_id, customer_name FROM customers;"
+        )
+        file_b = tmp_path / "a_use_view.sql"  # sorted first
+        file_b.write_text("SELECT * FROM customer_summary;")
+
+        builder = GraphBuilder(resolve_schema=True)
+        builder.add_files([file_b, file_a])
+        graph = builder.build()
+
+        node_ids = {n.identifier for n in graph.nodes}
+        assert "customer_summary.customer_id" in node_ids
+        assert "customer_summary.customer_name" in node_ids
+
+    def test_without_resolve_schema_star_not_expanded(self, tmp_path):
+        """Without --resolve-schema, cross-file stars are NOT resolved."""
+        file_a = tmp_path / "a_create_view.sql"
+        file_a.write_text(
+            "CREATE VIEW customer_summary AS "
+            "SELECT customer_id, customer_name FROM customers;"
+        )
+        file_b = tmp_path / "b_use_view.sql"
+        file_b.write_text("SELECT * FROM customer_summary;")
+
+        builder = GraphBuilder(resolve_schema=False)
+        builder.add_files([file_a, file_b])
+        graph = builder.build()
+
+        node_ids = {n.identifier for n in graph.nodes}
+        # Without resolve_schema, file B's star is unresolved — produces '*'
+        assert "*" in node_ids
+
+    def test_no_star_with_resolve_schema_passes(self, tmp_path):
+        """--no-star + --resolve-schema succeeds when schema is available."""
+        file_a = tmp_path / "a_create_view.sql"
+        file_a.write_text(
+            "CREATE VIEW customer_summary AS "
+            "SELECT customer_id, customer_name FROM customers;"
+        )
+        file_b = tmp_path / "b_use_view.sql"
+        file_b.write_text("SELECT * FROM customer_summary;")
+
+        builder = GraphBuilder(resolve_schema=True, no_star=True)
+        builder.add_files([file_a, file_b])
+        graph = builder.build()
+
+        assert graph.metadata.total_nodes > 0
+
+    def test_resolve_schema_accumulated_across_files(self, tmp_path):
+        """Schema accumulates across multiple files."""
+        file1 = tmp_path / "a.sql"
+        file1.write_text("CREATE VIEW v1 AS SELECT id, name FROM t1;")
+        file2 = tmp_path / "b.sql"
+        file2.write_text("CREATE VIEW v2 AS SELECT code, value FROM t2;")
+        file3 = tmp_path / "c.sql"
+        file3.write_text("SELECT * FROM v1; SELECT * FROM v2;")
+
+        builder = GraphBuilder(resolve_schema=True)
+        builder.add_files([file1, file2, file3])
+        graph = builder.build()
+
+        node_ids = {n.identifier for n in graph.nodes}
+        assert "v1.id" in node_ids
+        assert "v1.name" in node_ids
+        assert "v2.code" in node_ids
+        assert "v2.value" in node_ids
+
+    @patch("sqlglider.catalog.get_catalog")
+    def test_catalog_fills_missing_schema(self, mock_get_catalog, tmp_path):
+        """Catalog provides DDL for tables not found in files."""
+        # File uses SELECT * from a table not defined in any file
+        sql_file = tmp_path / "query.sql"
+        sql_file.write_text("SELECT * FROM remote_table;")
+
+        # Mock catalog returns DDL for remote_table
+        mock_catalog = MagicMock()
+        mock_catalog.get_ddl_batch.return_value = {
+            "remote_table": "CREATE TABLE remote_table (id INT, value STRING)"
+        }
+        mock_get_catalog.return_value = mock_catalog
+
+        builder = GraphBuilder(
+            resolve_schema=True,
+            catalog_type="mock_catalog",
+        )
+        builder.add_files([sql_file])
+        graph = builder.build()
+
+        node_ids = {n.identifier for n in graph.nodes}
+        assert "remote_table.id" in node_ids
+        assert "remote_table.value" in node_ids
+        mock_catalog.get_ddl_batch.assert_called_once()
+
+    @patch("sqlglider.catalog.get_catalog")
+    def test_catalog_does_not_override_file_schema(self, mock_get_catalog, tmp_path):
+        """File-derived schema takes priority over catalog (fill gaps only)."""
+        file_a = tmp_path / "a.sql"
+        file_a.write_text("CREATE VIEW my_view AS SELECT id, name FROM source;")
+        file_b = tmp_path / "b.sql"
+        file_b.write_text("SELECT * FROM my_view;")
+
+        # Catalog would return different columns — should not be used
+        mock_catalog = MagicMock()
+        mock_catalog.get_ddl_batch.return_value = {}
+        mock_get_catalog.return_value = mock_catalog
+
+        builder = GraphBuilder(
+            resolve_schema=True,
+            catalog_type="mock_catalog",
+        )
+        builder.add_files([file_a, file_b])
+        graph = builder.build()
+
+        node_ids = {n.identifier for n in graph.nodes}
+        # my_view schema from file, not catalog
+        assert "my_view.id" in node_ids
+        assert "my_view.name" in node_ids
+
+    @patch("sqlglider.catalog.get_catalog")
+    def test_catalog_error_handling(self, mock_get_catalog, tmp_path):
+        """Catalog errors for individual tables don't fail the build."""
+        sql_file = tmp_path / "query.sql"
+        sql_file.write_text("SELECT * FROM missing_table;")
+
+        mock_catalog = MagicMock()
+        mock_catalog.get_ddl_batch.return_value = {
+            "missing_table": "ERROR: Table not found"
+        }
+        mock_get_catalog.return_value = mock_catalog
+
+        builder = GraphBuilder(
+            resolve_schema=True,
+            catalog_type="mock_catalog",
+        )
+        # Should not raise — errors are handled gracefully
+        builder.add_files([sql_file])
+        graph = builder.build()
+        assert graph is not None

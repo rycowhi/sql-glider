@@ -89,7 +89,13 @@ WarningCallback = Callable[[str], None]
 class LineageAnalyzer:
     """Analyze column and table lineage for SQL queries."""
 
-    def __init__(self, sql: str, dialect: str = "spark", no_star: bool = False):
+    def __init__(
+        self,
+        sql: str,
+        dialect: str = "spark",
+        no_star: bool = False,
+        schema: Optional[Dict[str, Dict[str, str]]] = None,
+    ):
         """
         Initialize the lineage analyzer.
 
@@ -97,6 +103,9 @@ class LineageAnalyzer:
             sql: SQL query string to analyze (can contain multiple statements)
             dialect: SQL dialect (default: spark)
             no_star: If True, fail when SELECT * cannot be resolved to columns
+            schema: Optional external schema mapping table names to column
+                definitions (e.g. {"table": {"col": "UNKNOWN"}}). File-derived
+                schema from CREATE statements will merge on top.
 
         Raises:
             ParseError: If the SQL cannot be parsed
@@ -107,7 +116,8 @@ class LineageAnalyzer:
         self._skipped_queries: List[SkippedQuery] = []
         # File-scoped schema context for cross-statement lineage
         # Maps table/view names to their column definitions
-        self._file_schema: Dict[str, Dict[str, str]] = {}
+        self._initial_schema: Dict[str, Dict[str, str]] = dict(schema) if schema else {}
+        self._file_schema: Dict[str, Dict[str, str]] = dict(self._initial_schema)
 
         try:
             # Parse all statements in the SQL string
@@ -131,6 +141,21 @@ class LineageAnalyzer:
     def skipped_queries(self) -> List[SkippedQuery]:
         """Get list of queries that were skipped during analysis."""
         return self._skipped_queries.copy()
+
+    def get_extracted_schema(self) -> Dict[str, Dict[str, str]]:
+        """Return the accumulated file schema after analysis."""
+        return dict(self._file_schema)
+
+    def extract_schema_only(self) -> Dict[str, Dict[str, str]]:
+        """Parse all statements and extract schema without running lineage.
+
+        Iterates through all expressions, extracting schema from CREATE
+        TABLE/VIEW AS SELECT statements. Returns the accumulated schema dict.
+        """
+        self._file_schema = dict(self._initial_schema)
+        for expr in self.expressions:
+            self._extract_schema_from_statement(expr)
+        return dict(self._file_schema)
 
     def get_output_columns(self) -> List[str]:
         """
@@ -426,7 +451,7 @@ class LineageAnalyzer:
         """
         results = []
         self._skipped_queries = []  # Reset skipped queries for this analysis
-        self._file_schema = {}  # Reset file schema for this analysis run
+        self._file_schema = dict(self._initial_schema)  # Reset to external schema
 
         for query_index, expr, preview in self._iterate_queries(table_filter):
             # Temporarily swap self.expr to analyze this query

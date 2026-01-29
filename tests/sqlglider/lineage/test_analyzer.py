@@ -2999,3 +2999,66 @@ class TestNoStar:
         assert len(results) == 1
         output_names = [item.output_name for item in results[0].lineage_items]
         assert not any("*" in name for name in output_names)
+
+
+class TestSchemaParam:
+    """Tests for external schema parameter."""
+
+    def test_schema_enables_star_expansion(self):
+        sql = "SELECT * FROM users"
+        schema = {"users": {"id": "UNKNOWN", "name": "UNKNOWN"}}
+        analyzer = LineageAnalyzer(sql, dialect="spark", schema=schema)
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
+        assert len(results) == 1
+        output_names = [item.output_name for item in results[0].lineage_items]
+        # Star is expanded — columns present (may or may not be qualified)
+        assert any("id" in n for n in output_names)
+        assert any("name" in n for n in output_names)
+        # No star placeholder
+        assert not any("*" in n for n in output_names)
+
+    def test_schema_with_no_star_passes(self):
+        sql = "SELECT * FROM users"
+        schema = {"users": {"id": "UNKNOWN", "name": "UNKNOWN"}}
+        analyzer = LineageAnalyzer(sql, dialect="spark", no_star=True, schema=schema)
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
+        assert len(results) == 1
+
+    def test_file_derived_schema_overrides_external(self):
+        """Schema from CREATE VIEW in the same file takes precedence."""
+        sql = """
+        CREATE VIEW users AS SELECT id, name, email FROM raw_users;
+        SELECT * FROM users;
+        """
+        # External schema has fewer columns
+        schema = {"users": {"id": "UNKNOWN"}}
+        analyzer = LineageAnalyzer(sql, dialect="spark", schema=schema)
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
+        # The second query should use the file-derived schema (3 cols)
+        star_result = results[1]
+        output_names = [item.output_name for item in star_result.lineage_items]
+        # File-derived schema has 3 columns, overriding external's 1
+        assert any("id" in n for n in output_names)
+        assert any("name" in n for n in output_names)
+        assert any("email" in n for n in output_names)
+
+    def test_extract_schema_only(self):
+        sql = """
+        CREATE VIEW v1 AS SELECT id, name FROM t1;
+        CREATE VIEW v2 AS SELECT code FROM t2;
+        SELECT * FROM v1;
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        schema = analyzer.extract_schema_only()
+        assert "v1" in schema
+        assert set(schema["v1"].keys()) == {"id", "name"}
+        assert "v2" in schema
+        assert set(schema["v2"].keys()) == {"code"}
+
+    def test_get_extracted_schema_after_analysis(self):
+        sql = "CREATE VIEW v1 AS SELECT id, name FROM t1;"
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
+        schema = analyzer.get_extracted_schema()
+        assert "v1" in schema
+        assert set(schema["v1"].keys()) == {"id", "name"}

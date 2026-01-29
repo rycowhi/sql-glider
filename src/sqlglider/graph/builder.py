@@ -18,6 +18,7 @@ from sqlglider.graph.models import (
 )
 from sqlglider.lineage.analyzer import LineageAnalyzer
 from sqlglider.utils.file_utils import read_sql_file
+from sqlglider.utils.schema import parse_ddl_to_schema
 
 console = Console(stderr=True)
 
@@ -34,6 +35,9 @@ class GraphBuilder:
         dialect: str = "spark",
         sql_preprocessor: Optional[SqlPreprocessor] = None,
         no_star: bool = False,
+        resolve_schema: bool = False,
+        catalog_type: Optional[str] = None,
+        catalog_config: Optional[Dict[str, object]] = None,
     ):
         """
         Initialize the graph builder.
@@ -45,16 +49,28 @@ class GraphBuilder:
                              Takes (sql: str, file_path: Path) and returns processed SQL.
                              Useful for templating (e.g., Jinja2 rendering).
             no_star: If True, fail when SELECT * cannot be resolved to columns
+            resolve_schema: If True, run a schema extraction pass across all
+                files before lineage analysis so that schema from any file is
+                available when analyzing every other file.
+            catalog_type: Optional catalog provider name (e.g. "databricks").
+                When set together with resolve_schema, DDL is pulled from the
+                catalog for tables whose schema could not be inferred from files.
+            catalog_config: Optional provider-specific configuration dict
+                passed to the catalog's configure() method.
         """
         self.node_format = node_format
         self.dialect = dialect
         self.sql_preprocessor = sql_preprocessor
         self.no_star = no_star
+        self.resolve_schema = resolve_schema
+        self.catalog_type = catalog_type
+        self.catalog_config = catalog_config
         self.graph: rx.PyDiGraph = rx.PyDiGraph()
         self._node_index_map: Dict[str, int] = {}  # identifier -> rustworkx node index
         self._source_files: Set[str] = set()
         self._edge_set: Set[tuple] = set()  # (source, target) for dedup
         self._skipped_files: List[tuple[str, str]] = []  # (file_path, reason)
+        self._resolved_schema: Dict[str, Dict[str, str]] = {}  # accumulated schema
 
     def add_file(
         self,
@@ -86,7 +102,10 @@ class GraphBuilder:
                 sql_content = self.sql_preprocessor(sql_content, file_path)
 
             analyzer = LineageAnalyzer(
-                sql_content, dialect=file_dialect, no_star=self.no_star
+                sql_content,
+                dialect=file_dialect,
+                no_star=self.no_star,
+                schema=self._resolved_schema if self._resolved_schema else None,
             )
             results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
 
@@ -209,23 +228,37 @@ class GraphBuilder:
             entry_dialect = entry.dialect or dialect or self.dialect
             files_with_dialects.append((file_path, entry_dialect))
 
-        # Process with progress
-        if files_with_dialects:
-            total = len(files_with_dialects)
-            with Progress(
-                TextColumn("[progress.description]{task.description}"),
-                BarColumn(),
-                TaskProgressColumn(),
-                console=console,
-                transient=False,
-            ) as progress:
-                task = progress.add_task("Parsing", total=total)
-                for i, (file_path, file_dialect) in enumerate(
-                    files_with_dialects, start=1
-                ):
-                    console.print(f"Parsing file {i}/{total}: {file_path.name}")
-                    self.add_file(file_path, file_dialect)
-                    progress.advance(task)
+        if not files_with_dialects:
+            return self
+
+        # Two-pass schema resolution
+        if self.resolve_schema:
+            console.print("[blue]Pass 1: Extracting schema from files...[/blue]")
+            file_paths_only = [fp for fp, _ in files_with_dialects]
+            self._resolved_schema = self._extract_schemas(file_paths_only, dialect)
+            if self.catalog_type:
+                self._resolved_schema = self._fill_schema_from_catalog(
+                    self._resolved_schema, file_paths_only, dialect
+                )
+            console.print(
+                f"[blue]Schema resolved for "
+                f"{len(self._resolved_schema)} table(s)[/blue]"
+            )
+
+        total = len(files_with_dialects)
+        description = "Pass 2: Analyzing lineage" if self.resolve_schema else "Parsing"
+        with Progress(
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            console=console,
+            transient=False,
+        ) as progress:
+            task = progress.add_task(description, total=total)
+            for i, (file_path, file_dialect) in enumerate(files_with_dialects, start=1):
+                console.print(f"Parsing file {i}/{total}: {file_path.name}")
+                self.add_file(file_path, file_dialect)
+                progress.advance(task)
 
         return self
 
@@ -249,8 +282,24 @@ class GraphBuilder:
         if not file_paths:
             return self
 
+        # Two-pass schema resolution: extract schema from all files first
+        if self.resolve_schema:
+            console.print("[blue]Pass 1: Extracting schema from files...[/blue]")
+            self._resolved_schema = self._extract_schemas(file_paths, dialect)
+            if self.catalog_type:
+                self._resolved_schema = self._fill_schema_from_catalog(
+                    self._resolved_schema, file_paths, dialect
+                )
+            console.print(
+                f"[blue]Schema resolved for "
+                f"{len(self._resolved_schema)} table(s)[/blue]"
+            )
+
         if show_progress:
             total = len(file_paths)
+            description = (
+                "Pass 2: Analyzing lineage" if self.resolve_schema else "Parsing"
+            )
             with Progress(
                 TextColumn("[progress.description]{task.description}"),
                 BarColumn(),
@@ -258,7 +307,7 @@ class GraphBuilder:
                 console=console,
                 transient=False,
             ) as progress:
-                task = progress.add_task("Parsing", total=total)
+                task = progress.add_task(description, total=total)
                 for i, file_path in enumerate(file_paths, start=1):
                     console.print(f"Parsing file {i}/{total}: {file_path.name}")
                     self.add_file(file_path, dialect)
@@ -267,6 +316,113 @@ class GraphBuilder:
             for file_path in file_paths:
                 self.add_file(file_path, dialect)
         return self
+
+    def _extract_schemas(
+        self,
+        file_paths: List[Path],
+        dialect: Optional[str] = None,
+    ) -> Dict[str, Dict[str, str]]:
+        """Run schema extraction pass across all files.
+
+        Parses each file and extracts schema from CREATE TABLE/VIEW
+        statements without performing lineage analysis.
+
+        Args:
+            file_paths: SQL files to extract schema from
+            dialect: SQL dialect override
+
+        Returns:
+            Accumulated schema dict from all files
+        """
+        schema: Dict[str, Dict[str, str]] = {}
+        for file_path in file_paths:
+            file_dialect = dialect or self.dialect
+            try:
+                sql_content = read_sql_file(file_path)
+                if self.sql_preprocessor:
+                    sql_content = self.sql_preprocessor(sql_content, file_path)
+                analyzer = LineageAnalyzer(
+                    sql_content, dialect=file_dialect, schema=schema
+                )
+                file_schema = analyzer.extract_schema_only()
+                schema.update(file_schema)
+            except Exception:
+                # Schema extraction failures are non-fatal; the file
+                # will be reported during the lineage pass if it also fails.
+                pass
+        return schema
+
+    def _fill_schema_from_catalog(
+        self,
+        schema: Dict[str, Dict[str, str]],
+        file_paths: List[Path],
+        dialect: Optional[str] = None,
+    ) -> Dict[str, Dict[str, str]]:
+        """Pull DDL from catalog for tables not yet in schema.
+
+        Extracts all table names referenced across the files, identifies
+        those missing from the schema, and fetches their DDL from the
+        configured catalog provider.
+
+        Args:
+            schema: Schema dict already populated from file extraction
+            file_paths: SQL files to scan for table references
+            dialect: SQL dialect override
+
+        Returns:
+            Updated schema dict with catalog-sourced entries added
+        """
+        from sqlglider.catalog import get_catalog
+
+        catalog = get_catalog(self.catalog_type)  # type: ignore[arg-type]
+        if self.catalog_config:
+            catalog.configure(self.catalog_config)
+
+        # Collect all referenced table names across files
+        all_tables: Set[str] = set()
+        for file_path in file_paths:
+            file_dialect = dialect or self.dialect
+            try:
+                sql_content = read_sql_file(file_path)
+                if self.sql_preprocessor:
+                    sql_content = self.sql_preprocessor(sql_content, file_path)
+                analyzer = LineageAnalyzer(sql_content, dialect=file_dialect)
+                tables_results = analyzer.analyze_tables()
+                for result in tables_results:
+                    for table_info in result.tables:
+                        # Skip CTEs — they don't exist in catalogs
+                        from sqlglider.lineage.analyzer import ObjectType
+
+                        if table_info.object_type != ObjectType.CTE:
+                            all_tables.add(table_info.name)
+            except Exception:
+                pass
+
+        # Find tables missing from schema
+        missing = [t for t in all_tables if t not in schema]
+        if not missing:
+            return schema
+
+        console.print(
+            f"[blue]Pulling DDL from {self.catalog_type} "
+            f"for {len(missing)} table(s)...[/blue]"
+        )
+
+        ddl_results = catalog.get_ddl_batch(missing)
+        file_dialect = dialect or self.dialect
+        for table_name, ddl in ddl_results.items():
+            if ddl.startswith("ERROR:"):
+                console.print(
+                    f"[yellow]Warning:[/yellow] Could not pull DDL "
+                    f"for {table_name}: {ddl}"
+                )
+                continue
+            parsed_schema = parse_ddl_to_schema(ddl, dialect=file_dialect)
+            for name, cols in parsed_schema.items():
+                if name not in schema:
+                    schema[name] = cols
+
+        return schema
 
     def _ensure_node(
         self,

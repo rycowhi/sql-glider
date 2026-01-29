@@ -1001,6 +1001,19 @@ def graph_build(
         "--no-star",
         help="Fail if SELECT * cannot be resolved to actual columns",
     ),
+    resolve_schema: bool = typer.Option(
+        False,
+        "--resolve-schema",
+        help="Extract schema from all files before lineage analysis, "
+        "enabling cross-file star resolution",
+    ),
+    catalog_type: Optional[str] = typer.Option(
+        None,
+        "--catalog-type",
+        "-c",
+        help="Catalog provider for pulling DDL of tables not found in files "
+        "(requires --resolve-schema). E.g. 'databricks'",
+    ),
 ) -> None:
     """
     Build a lineage graph from SQL files.
@@ -1036,6 +1049,15 @@ def graph_build(
     dialect = dialect or config.dialect or "spark"
     templater = templater or config.templater  # None means no templating
     no_star = no_star or config.no_star or False
+    resolve_schema = resolve_schema or config.resolve_schema or False
+
+    if catalog_type and not resolve_schema:
+        err_console.print("[red]Error:[/red] --catalog-type requires --resolve-schema")
+        raise typer.Exit(1)
+
+    # Only inherit catalog_type from config when resolve_schema is active
+    if resolve_schema and not catalog_type:
+        catalog_type = config.catalog_type
 
     # Validate and convert node format to enum
     try:
@@ -1088,11 +1110,21 @@ def graph_build(
         sql_preprocessor = _preprocess
 
     try:
+        # Build catalog config from config file if available
+        catalog_config_dict = None
+        if catalog_type and config.catalog:
+            provider_config = getattr(config.catalog, catalog_type, None)
+            if provider_config:
+                catalog_config_dict = provider_config.model_dump(exclude_none=True)
+
         builder = GraphBuilder(
             node_format=node_format_enum,
             dialect=dialect,
             sql_preprocessor=sql_preprocessor,
             no_star=no_star,
+            resolve_schema=resolve_schema,
+            catalog_type=catalog_type,
+            catalog_config=catalog_config_dict,
         )
 
         # Process manifest if provided
