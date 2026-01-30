@@ -1480,7 +1480,7 @@ class LineageAnalyzer:
 
     def _extract_schema_from_statement(self, expr: exp.Expression) -> None:
         """
-        Extract column definitions from CREATE VIEW/TABLE AS SELECT statements.
+        Extract column definitions from CREATE VIEW/TABLE AS SELECT and CACHE TABLE statements.
 
         This method builds up file-scoped schema context as statements are processed,
         enabling SQLGlot to correctly expand SELECT * and trace cross-statement references.
@@ -1488,29 +1488,39 @@ class LineageAnalyzer:
         Args:
             expr: The SQL expression to extract schema from
         """
-        # Only handle CREATE VIEW or CREATE TABLE (AS SELECT)
-        if not isinstance(expr, exp.Create):
-            return
-        if expr.kind not in ("VIEW", "TABLE"):
+        target_name: str | None = None
+        select_node: exp.Expression | None = None
+
+        if isinstance(expr, exp.Create):
+            if expr.kind not in ("VIEW", "TABLE"):
+                return
+
+            target = expr.this
+            if isinstance(target, exp.Schema):
+                target = target.this
+            if not isinstance(target, exp.Table):
+                return
+
+            target_name = self._get_qualified_table_name(target)
+            select_node = expr.expression
+
+            # Handle Subquery wrapper (e.g., CREATE VIEW AS (SELECT ...))
+            if isinstance(select_node, exp.Subquery):
+                select_node = select_node.this
+
+        elif isinstance(expr, exp.Cache):
+            target = expr.this
+            if not isinstance(target, exp.Table):
+                return
+
+            target_name = self._get_qualified_table_name(target)
+            select_node = expr.expression
+
+        else:
             return
 
-        # Get target table/view name
-        target = expr.this
-        if isinstance(target, exp.Schema):
-            target = target.this
-        if not isinstance(target, exp.Table):
+        if target_name is None or select_node is None:
             return
-
-        target_name = self._get_qualified_table_name(target)
-
-        # Get the SELECT node from the CREATE statement
-        select_node = expr.expression
-        if select_node is None:
-            return
-
-        # Handle Subquery wrapper (e.g., CREATE VIEW AS (SELECT ...))
-        if isinstance(select_node, exp.Subquery):
-            select_node = select_node.this
 
         if not isinstance(
             select_node, (exp.Select, exp.Union, exp.Intersect, exp.Except)

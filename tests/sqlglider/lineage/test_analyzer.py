@@ -2949,6 +2949,62 @@ class TestCacheTableStatements:
         assert len(skipped) == 1
         assert "DELETE" in skipped[0].statement_type
 
+    def test_cache_table_star_resolution_in_subsequent_query(self):
+        """SELECT * FROM a cached table should resolve columns from the CACHE statement."""
+        sql = """
+        CACHE TABLE cached_orders AS SELECT customer_id, order_total FROM orders;
+        SELECT * FROM cached_orders;
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
+
+        assert len(results) == 2
+        # Second query should have resolved the star
+        star_result = results[1]
+        output_names = sorted(item.output_name for item in star_result.lineage_items)
+        output_names = sorted(item.output_name for item in star_result.lineage_items)
+        assert output_names == ["customer_id", "order_total"]
+
+    def test_cache_table_qualified_star_resolution(self):
+        """table.* on a cached table should resolve columns."""
+        sql = """
+        CACHE TABLE cached_orders AS SELECT customer_id, order_total FROM orders;
+        SELECT cached_orders.* FROM cached_orders;
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
+
+        assert len(results) == 2
+        star_result = results[1]
+        output_names = sorted(item.output_name for item in star_result.lineage_items)
+        assert output_names == ["customer_id", "order_total"]
+
+    def test_cache_lazy_table_star_resolution(self):
+        """CACHE LAZY TABLE should also register schema for star resolution."""
+        sql = """
+        CACHE LAZY TABLE cached_users AS SELECT id, name, email FROM users;
+        SELECT * FROM cached_users;
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
+
+        assert len(results) == 2
+        star_result = results[1]
+        output_names = sorted(item.output_name for item in star_result.lineage_items)
+        assert output_names == ["email", "id", "name"]
+
+    def test_cache_table_schema_registered(self):
+        """Cached table schema should be registered for downstream star resolution."""
+        sql = """
+        CACHE TABLE cached_orders AS SELECT customer_id, order_total FROM orders;
+        SELECT * FROM cached_orders;
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        schema = analyzer.extract_schema_only()
+        assert "cached_orders" in schema
+        assert "customer_id" in schema["cached_orders"]
+        assert "order_total" in schema["cached_orders"]
+
 
 class TestNoStar:
     """Tests for the --no-star flag that fails on unresolvable SELECT *."""
