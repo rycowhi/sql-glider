@@ -46,7 +46,7 @@ def parse_ddl_to_schema(ddl: str, dialect: str = "spark") -> Dict[str, Dict[str,
         table_name = _get_qualified_name(target)
 
         if columns:
-            schema[table_name] = {col: "UNKNOWN" for col in columns}
+            schema[table_name] = {col.lower(): "UNKNOWN" for col in columns}
 
     return schema
 
@@ -59,4 +59,4 @@ def _get_qualified_name(table: exp.Table) -> str:
     if table.db:
         parts.append(table.db)
     parts.append(table.name)
-    return ".".join(parts)
+    return ".".join(parts).lower()

@@ -119,39 +119,39 @@ class TestCaseInsensitiveForwardLineage:
             # Lowercase
             (
                 "target_table.customer_name",
-                "TARGET_TABLE.customer_name",
+                "target_table.customer_name",
                 ["customers.customer_name"],
             ),
             (
                 "target_table.region",
-                "TARGET_TABLE.region",
+                "target_table.region",
                 ["customers.region"],
             ),
             (
                 "target_table.total_amount",
-                "TARGET_TABLE.total_amount",
+                "target_table.total_amount",
                 ["orders.order_amount"],
             ),
             # Uppercase
             (
-                "TARGET_TABLE.CUSTOMER_NAME",
-                "TARGET_TABLE.customer_name",
+                "target_table.CUSTOMER_NAME",
+                "target_table.customer_name",
                 ["customers.customer_name"],
             ),
             (
-                "TARGET_TABLE.REGION",
-                "TARGET_TABLE.region",
+                "target_table.REGION",
+                "target_table.region",
                 ["customers.region"],
             ),
             # Mixed case
             (
                 "TaRgEt_TaBlE.CuStOmEr_NaMe",
-                "TARGET_TABLE.customer_name",
+                "target_table.customer_name",
                 ["customers.customer_name"],
             ),
             (
                 "target_TABLE.REGION",
-                "TARGET_TABLE.region",
+                "target_table.region",
                 ["customers.region"],
             ),
         ],
@@ -346,39 +346,39 @@ class TestCaseInsensitiveReverseLineage:
             (
                 "customers.customer_name",
                 "customers.customer_name",
-                ["TARGET_TABLE.customer_name"],
+                ["target_table.customer_name"],
             ),
             (
                 "customers.region",
                 "customers.region",
-                ["TARGET_TABLE.region"],
+                ["target_table.region"],
             ),
             (
                 "orders.order_amount",
                 "orders.order_amount",
-                ["TARGET_TABLE.segment", "TARGET_TABLE.total_amount"],
+                ["target_table.segment", "target_table.total_amount"],
             ),
             # Uppercase
             (
                 "CUSTOMERS.CUSTOMER_NAME",
                 "customers.customer_name",
-                ["TARGET_TABLE.customer_name"],
+                ["target_table.customer_name"],
             ),
             (
                 "CUSTOMERS.REGION",
                 "customers.region",
-                ["TARGET_TABLE.region"],
+                ["target_table.region"],
             ),
             # Mixed case
             (
                 "CuStOmErS.CuStOmEr_NaMe",
                 "customers.customer_name",
-                ["TARGET_TABLE.customer_name"],
+                ["target_table.customer_name"],
             ),
             (
                 "cUsToMeRs.ReGiOn",
                 "customers.region",
-                ["TARGET_TABLE.region"],
+                ["target_table.region"],
             ),
         ],
     )

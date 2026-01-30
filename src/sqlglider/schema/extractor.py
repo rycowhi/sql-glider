@@ -41,7 +41,14 @@ def extract_schemas_from_files(
     if console is None:
         console = Console(stderr=True)
 
-    schema: SchemaDict = dict(initial_schema) if initial_schema else {}
+    schema: SchemaDict = (
+        {
+            k.lower(): {c.lower(): v for c, v in cols.items()}
+            for k, cols in initial_schema.items()
+        }
+        if initial_schema
+        else {}
+    )
     total = len(file_paths)
 
     with Progress(
@@ -65,7 +72,11 @@ def extract_schemas_from_files(
                     strict_schema=strict_schema,
                 )
                 file_schema = analyzer.extract_schema_only()
-                schema.update(file_schema)
+                for table_name, columns in file_schema.items():
+                    if table_name in schema:
+                        schema[table_name].update(columns)
+                    else:
+                        schema[table_name] = columns
             except SchemaResolutionError:
                 raise
             except Exception:

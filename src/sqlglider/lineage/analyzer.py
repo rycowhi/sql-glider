@@ -1177,7 +1177,7 @@ class LineageAnalyzer:
         if table.db:
             parts.append(table.db)
         parts.append(table.name)
-        return ".".join(parts)
+        return ".".join(parts).lower()
 
     def _resolve_table_reference(self, ref: str, select_node: exp.Select) -> str:
         """
@@ -1522,7 +1522,7 @@ class LineageAnalyzer:
 
         if columns:
             # Store with UNKNOWN type - SQLGlot only needs column names for expansion
-            self._file_schema[target_name] = {col: "UNKNOWN" for col in columns}
+            self._file_schema[target_name] = {col.lower(): "UNKNOWN" for col in columns}
 
     def _extract_schema_from_dql(self, expr: exp.Expression) -> None:
         """Infer table schemas from column references in DQL.
@@ -1634,8 +1634,9 @@ class LineageAnalyzer:
 
                 if actual_table not in self._file_schema:
                     self._file_schema[actual_table] = {}
-                if col_name not in self._file_schema[actual_table]:
-                    self._file_schema[actual_table][col_name] = "UNKNOWN"
+                col_lower = col_name.lower()
+                if col_lower not in self._file_schema[actual_table]:
+                    self._file_schema[actual_table][col_lower] = "UNKNOWN"
 
     def _extract_columns_from_select(
         self, select_node: Union[exp.Select, exp.Union, exp.Intersect, exp.Except]

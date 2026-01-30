@@ -81,6 +81,58 @@ class TestExtractSchemasFromFiles:
         assert "id" in schema["customers"]
         assert "order_id" in schema["orders"]
 
+    def test_merges_columns_for_same_table(self, tmp_path, console):
+        """Test that columns are merged when the same table appears in multiple files."""
+        file1 = tmp_path / "a.sql"
+        file1.write_text("SELECT c.id, c.name FROM customers c;")
+
+        file2 = tmp_path / "b.sql"
+        file2.write_text("SELECT c.id, c.age FROM customers c;")
+
+        schema = extract_schemas_from_files(
+            [file1, file2], dialect="spark", console=console
+        )
+
+        assert "customers" in schema
+        assert "id" in schema["customers"]
+        assert "name" in schema["customers"]
+        assert "age" in schema["customers"]
+
+    def test_merges_columns_case_insensitive(self, tmp_path, console):
+        """Test that tables with different casing are merged into one entry."""
+        file1 = tmp_path / "a.sql"
+        file1.write_text("SELECT c.id, c.name FROM Customers c;")
+
+        file2 = tmp_path / "b.sql"
+        file2.write_text("SELECT c.id, c.AGE FROM customers c;")
+
+        schema = extract_schemas_from_files(
+            [file1, file2], dialect="spark", console=console
+        )
+
+        assert "customers" in schema
+        assert len([k for k in schema if k.lower() == "customers"]) == 1
+        assert "id" in schema["customers"]
+        assert "name" in schema["customers"]
+        assert "age" in schema["customers"]
+
+    def test_initial_schema_normalized(self, tmp_path, console):
+        """Test that initial schema keys are normalized to lowercase."""
+        sql_file = tmp_path / "query.sql"
+        sql_file.write_text("SELECT o.id FROM orders o;")
+
+        initial = {"Existing_Table": {"Col1": "UNKNOWN"}}
+        schema = extract_schemas_from_files(
+            [sql_file],
+            dialect="spark",
+            initial_schema=initial,
+            console=console,
+        )
+
+        assert "existing_table" in schema
+        assert "col1" in schema["existing_table"]
+        assert "orders" in schema
+
     def test_initial_schema_preserved(self, tmp_path, console):
         """Test that initial schema is included in result."""
         sql_file = tmp_path / "query.sql"
