@@ -3006,6 +3006,105 @@ class TestCacheTableStatements:
         assert "order_total" in schema["cached_orders"]
 
 
+class TestSubqueryAliasStarResolution:
+    """Tests for resolving qualified star (sub.*) on aliased subqueries."""
+
+    def test_subquery_alias_star_in_from(self):
+        """sub.* on an aliased subquery in FROM should resolve columns."""
+        sql = """
+        SELECT sub.*
+        FROM (SELECT id, SUM(amount) AS total FROM orders GROUP BY id) sub
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
+
+        assert len(results) == 1
+        output_names = sorted(item.output_name for item in results[0].lineage_items)
+        assert output_names == ["id", "total"]
+
+    def test_subquery_alias_star_in_join(self):
+        """sub.* on an aliased subquery in JOIN should resolve columns."""
+        sql = """
+        SELECT t.id, sub.*
+        FROM db.schema.users t
+        JOIN (SELECT user_id, SUM(amount) AS total FROM db.schema.orders GROUP BY user_id) sub
+        ON t.id = sub.user_id
+        """
+        analyzer = LineageAnalyzer(
+            sql,
+            dialect="spark",
+            schema={"db.schema.users": {"id": "INT"}},
+        )
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
+
+        assert len(results) == 1
+        output_names = sorted(item.output_name for item in results[0].lineage_items)
+        assert output_names == ["db.schema.users.id", "total", "user_id"]
+
+    def test_subquery_alias_star_with_generated_columns(self):
+        """sub.* plus generated columns should all resolve."""
+        sql = """
+        SELECT
+            sub.*,
+            sub.total * 0.1 AS commission
+        FROM (SELECT id, SUM(amount) AS total FROM orders GROUP BY id) sub
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
+
+        assert len(results) == 1
+        output_names = sorted(item.output_name for item in results[0].lineage_items)
+        assert output_names == ["commission", "id", "total"]
+
+    def test_cache_table_with_subquery_alias_star(self):
+        """CACHE TABLE using sub.* should register all columns for downstream use."""
+        sql = """
+        CACHE TABLE cached_result AS
+        SELECT
+            sub.*,
+            d.dept_name
+        FROM (
+            SELECT id, SUM(amount) AS total
+            FROM db.schema.orders
+            GROUP BY id
+        ) sub
+        JOIN db.schema.departments d ON sub.id = d.id;
+
+        SELECT * FROM cached_result;
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
+
+        assert len(results) == 2
+        # Second query should resolve all columns from the cached table
+        star_result = results[1]
+        output_names = sorted(item.output_name for item in star_result.lineage_items)
+        assert output_names == ["dept_name", "id", "total"]
+
+    def test_temp_view_with_subquery_alias_star(self):
+        """CREATE TEMP VIEW using sub.* should register all columns for downstream use."""
+        sql = """
+        CREATE TEMPORARY VIEW enriched AS
+        SELECT
+            sub.*,
+            sub.total * 0.1 AS commission
+        FROM (
+            SELECT id, SUM(amount) AS total
+            FROM db.schema.orders
+            GROUP BY id
+        ) sub;
+
+        SELECT * FROM enriched;
+        """
+        analyzer = LineageAnalyzer(sql, dialect="spark")
+        results = analyzer.analyze_queries(level=AnalysisLevel.COLUMN)
+
+        assert len(results) == 2
+        star_result = results[1]
+        output_names = sorted(item.output_name for item in star_result.lineage_items)
+        assert output_names == ["commission", "id", "total"]
+
+
 class TestNoStar:
     """Tests for the --no-star flag that fails on unresolvable SELECT *."""
 

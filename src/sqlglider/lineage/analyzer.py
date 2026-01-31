@@ -1832,7 +1832,13 @@ class LineageAnalyzer:
                 if actual_name in self._file_schema:
                     return list(self._file_schema[actual_name].keys())
 
-            # Check JOIN clauses for aliased tables
+            # Check if it's an aliased subquery (e.g., FROM (SELECT ...) sub)
+            if isinstance(source, exp.Subquery) and source.alias == table_name:
+                inner_select = source.this
+                if isinstance(inner_select, exp.Select):
+                    return self._extract_subquery_columns(inner_select)
+
+            # Check JOIN clauses for aliased tables and subqueries
             joins = select_node.args.get("joins")
             if joins:
                 for join in joins:
@@ -1845,6 +1851,13 @@ class LineageAnalyzer:
                             actual_name = self._get_qualified_table_name(join_source)
                             if actual_name in self._file_schema:
                                 return list(self._file_schema[actual_name].keys())
+                        if (
+                            isinstance(join_source, exp.Subquery)
+                            and join_source.alias == table_name
+                        ):
+                            inner_select = join_source.this
+                            if isinstance(inner_select, exp.Select):
+                                return self._extract_subquery_columns(inner_select)
 
         return []
 
