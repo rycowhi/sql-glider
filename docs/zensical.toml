@@ -27,14 +27,14 @@ site_author = "Ryan Whitcomb"
 # The site_url is the canonical URL for your site. When building online
 # documentation you should set this.
 # Read more: https://zensical.org/docs/setup/basics/#site_url
-#site_url = "https://www.example.com/"
+site_url = "https://github.com/rycowhi/sql-glider/tree/main/src/sqlglider"
 
 # The copyright notice appears in the page footer and can contain an HTML
 # fragment.
 #
 # Read more: https://zensical.org/docs/setup/basics/#copyright
 copyright = """
-Copyright &copy; 2026 The authors
+Copyright &copy; 2026 Ryan Whitcomb
 """
 
 # Zensical supports both implicit navigation and explicitly defined navigation.
@@ -258,14 +258,14 @@ features = [
 # - https://zensical.org/docs/setup/colors/
 # ----------------------------------------------------------------------------
 [[project.theme.palette]]
-scheme = "default"
-toggle.icon = "lucide/sun"
-toggle.name = "Switch to dark mode"
-
-[[project.theme.palette]]
 scheme = "slate"
 toggle.icon = "lucide/moon"
 toggle.name = "Switch to light mode"
+
+[[project.theme.palette]]
+scheme = "default"
+toggle.icon = "lucide/sun"
+toggle.name = "Switch to dark mode"
 
 # ----------------------------------------------------------------------------
 # In the "font" subsection you can configure the fonts used. By default, fonts
@@ -300,7 +300,7 @@ toggle.name = "Switch to light mode"
 # The "extra" section contains miscellaneous settings.
 # ----------------------------------------------------------------------------
 #[[project.extra.social]]
-#icon = "fontawesome/brands/github"
-#link = "https://github.com/user/repo"
+icon = "fontawesome/brands/github"
+link = "https://github.com/rycowhi/sql-glider/tree/main/src/sqlglider"
 
 

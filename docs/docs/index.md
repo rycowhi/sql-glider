@@ -4,6 +4,8 @@ icon: lucide/rocket
 
 # SQL Glider
 
+![SQL Glider Logo](./static/sqlglider-logo-transparent.png)
+
 SQL Glider is a SQL Utility Toolkit for better understanding, use, and governance of SQL queries in a native environment. It provides column-level and table-level lineage analysis for standalone SQL files using SQLGlot's powerful parsing and lineage capabilities.
 
 ## Installation

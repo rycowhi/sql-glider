@@ -1,5 +1,7 @@
 # SQL Glider
 
+![SQL Glider Logo](./docs/docs/static/sqlglider-logo-transparent.png)
+
 SQL Utility Toolkit for better understanding, use, and governance of your queries in a native environment.
 
 **[Read the docs](https://rycowhi.github.io/sql-glider/)**
