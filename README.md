@@ -2,6 +2,8 @@
 
 SQL Utility Toolkit for better understanding, use, and governance of your queries in a native environment.
 
+**[Read the docs](https://rycowhi.github.io/sql-glider/)**
+
 ## Overview
 
 SQL Glider provides powerful column-level and table-level lineage analysis for SQL queries using SQLGlot. It operates on standalone SQL files without requiring a full project setup, making it perfect for ad-hoc analysis, data governance, and understanding query dependencies.
@@ -763,6 +765,31 @@ src/sqlglider/
 └── utils/
     └── file_utils.py         # File I/O utilities
 ```
+
+## Documentation
+
+Project documentation is built with [Zensical](https://zensical.org/) and lives in the `docs/` directory:
+
+```
+docs/
+├── zensical.toml    # Site configuration (name, theme, features)
+└── docs/            # Markdown content
+    └── index.md     # Landing page
+```
+
+To preview docs locally:
+
+```bash
+cd docs && uv run zensical serve
+```
+
+To build the static site:
+
+```bash
+cd docs && uv run zensical build
+```
+
+The built site outputs to `docs/site/` (git-ignored). Documentation is automatically deployed to GitHub Pages on pushes to `main` via the `docs.yml` workflow.
 
 ## Publishing
 
