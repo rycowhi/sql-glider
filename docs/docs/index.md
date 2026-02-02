@@ -10,9 +10,17 @@ SQL Glider is a SQL Utility Toolkit for better understanding, use, and governanc
 
 ## Installation
 
-```bash
-pip install sql-glider
-```
+=== "uv"
+
+    ```bash
+    uv add sql-glider
+    ```
+
+=== "pip"
+
+    ```bash
+    pip install sql-glider
+    ```
 
 ## Quick Start
 

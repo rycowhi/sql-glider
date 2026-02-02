@@ -160,6 +160,65 @@ sqlglider graph query graph.json --upstream total_spent -f json
 sqlglider graph query graph.json --upstream total_spent -f csv
 ```
 
+### Example: Upstream Lineage in JSON
+
+JSON output is especially useful when you want to feed lineage data into other tools — CI checks, data catalogs, documentation generators, or custom dashboards. Here's what the upstream query for `total_spent` looks like in JSON:
+
+```bash
+sqlglider graph query graph.json --upstream total_spent -f json
+```
+
+```json
+{
+  "query_column": "total_spent",
+  "direction": "upstream",
+  "count": 1,
+  "columns": [
+    {
+      "identifier": "orders.order_total",
+      "file_path": "queries/reports.sql",
+      "query_index": 0,
+      "schema_name": null,
+      "table": "orders",
+      "column": "order_total",
+      "hops": 1,
+      "output_column": "total_spent",
+      "is_root": true,
+      "is_leaf": false,
+      "paths": [
+        ["orders.order_total", "total_spent"]
+      ]
+    }
+  ]
+}
+```
+
+Each entry in `columns` tells you:
+
+| Field | Description |
+|-------|-------------|
+| `identifier` | Fully qualified source column (`table.column`) |
+| `file_path` | The SQL file that defines this relationship |
+| `query_index` | Which query in the file (0-based, for multi-statement files) |
+| `table` / `column` | Parsed components of the identifier |
+| `hops` | Distance from the queried column (1 = direct source) |
+| `is_root` | `true` if this column has no further upstream sources |
+| `is_leaf` | `true` if this column has no downstream consumers |
+| `paths` | Every path from this source to the queried column, as ordered node lists |
+
+!!! tip "Tracing lineage across files"
+
+    The `file_path` field is particularly valuable in large graphs spanning dozens or hundreds of SQL files. It tells you exactly which file defines each relationship, so you can trace a column's journey across your entire pipeline — from raw ingestion scripts through staging layers to final reports — without having to search through files manually.
+
+!!! tip "Using JSON output in CI"
+
+    JSON output pairs well with tools like `jq` for scripted checks. For example, to list all root source tables feeding a report column:
+
+    ```bash
+    sqlglider graph query graph.json --upstream total_spent -f json \
+      | jq -r '.columns[] | select(.is_root) | .table'
+    ```
+
 ## Building Graphs from Multiple Sources
 
 ### Explicit File List
