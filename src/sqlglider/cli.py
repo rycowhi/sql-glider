@@ -1678,7 +1678,14 @@ def graph_query(
         )
         raise typer.Exit(1)
 
-    if output_format not in ["text", "json", "csv", "mermaid", "mermaid-markdown", "dot"]:
+    if output_format not in [
+        "text",
+        "json",
+        "csv",
+        "mermaid",
+        "mermaid-markdown",
+        "dot",
+    ]:
         err_console.print(
             f"[red]Error:[/red] Invalid output format '{output_format}'. "
             "Use 'text', 'json', 'csv', 'mermaid', 'mermaid-markdown', or 'dot'."
@@ -1873,9 +1880,7 @@ def graph_visualize(
 
         if output_file:
             output_file.write_text(diagram, encoding="utf-8")
-            console.print(
-                f"[green]Success:[/green] Diagram written to {output_file}"
-            )
+            console.print(f"[green]Success:[/green] Diagram written to {output_file}")
         else:
             print(diagram)
 
