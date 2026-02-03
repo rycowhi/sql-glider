@@ -637,9 +637,7 @@ class PlotlyFormatter:
             },
         ]
 
-        direction_label = (
-            "Upstream" if result.direction == "upstream" else "Downstream"
-        )
+        direction_label = "Upstream" if result.direction == "upstream" else "Downstream"
         title = f"{direction_label} Lineage: {result.query_column}"
 
         figure = {

@@ -524,9 +524,7 @@ class TestPlotlyFormatterFullGraph:
         figure = json.loads(result)
 
         # Find node trace (markers+text mode)
-        node_traces = [
-            t for t in figure["data"] if t.get("mode") == "markers+text"
-        ]
+        node_traces = [t for t in figure["data"] if t.get("mode") == "markers+text"]
         assert len(node_traces) == 1
 
         # Should have 3 nodes
@@ -579,16 +577,16 @@ class TestPlotlyFormatterQueryResult:
         edge_traces = [t for t in figure["data"] if t.get("mode") == "lines"]
         assert len(edge_traces) == 2  # source->mid, mid->target
 
-    def test_queried_node_has_amber_color(self, upstream_query_result, plotly_available):
+    def test_queried_node_has_amber_color(
+        self, upstream_query_result, plotly_available
+    ):
         if not plotly_available:
             pytest.skip("plotly not installed")
 
         result = PlotlyFormatter.format_query_result(upstream_query_result)
         figure = json.loads(result)
 
-        node_traces = [
-            t for t in figure["data"] if t.get("mode") == "markers+text"
-        ]
+        node_traces = [t for t in figure["data"] if t.get("mode") == "markers+text"]
         assert len(node_traces) == 1
 
         node_trace = node_traces[0]
@@ -603,24 +601,22 @@ class TestPlotlyFormatterQueryResult:
         result = PlotlyFormatter.format_query_result(upstream_query_result)
         figure = json.loads(result)
 
-        node_traces = [
-            t for t in figure["data"] if t.get("mode") == "markers+text"
-        ]
+        node_traces = [t for t in figure["data"] if t.get("mode") == "markers+text"]
         node_trace = node_traces[0]
         colors = node_trace["marker"]["color"]
         # source.col is a root and should be teal
         assert ROOT_FILL in colors
 
-    def test_leaf_node_has_violet_color(self, downstream_query_result, plotly_available):
+    def test_leaf_node_has_violet_color(
+        self, downstream_query_result, plotly_available
+    ):
         if not plotly_available:
             pytest.skip("plotly not installed")
 
         result = PlotlyFormatter.format_query_result(downstream_query_result)
         figure = json.loads(result)
 
-        node_traces = [
-            t for t in figure["data"] if t.get("mode") == "markers+text"
-        ]
+        node_traces = [t for t in figure["data"] if t.get("mode") == "markers+text"]
         node_trace = node_traces[0]
         colors = node_trace["marker"]["color"]
         # target.col is a leaf and should be violet
@@ -633,9 +629,7 @@ class TestPlotlyFormatterQueryResult:
         result = PlotlyFormatter.format_query_result(upstream_query_result)
         figure = json.loads(result)
 
-        legend_traces = [
-            t for t in figure["data"] if t.get("showlegend") is True
-        ]
+        legend_traces = [t for t in figure["data"] if t.get("showlegend") is True]
         assert len(legend_traces) == 3  # Queried, Root, Leaf
 
         legend_names = [t["name"] for t in legend_traces]

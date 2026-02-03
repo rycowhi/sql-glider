@@ -33,13 +33,19 @@ def load_figure(source: str | Path | None = None) -> dict:
         # Read from stdin
         if sys.stdin.isatty():
             print("Usage: python plotly_viewer.py <lineage.json>", file=sys.stderr)
-            print("   or: sqlglider graph visualize graph.json -f plotly | python plotly_viewer.py", file=sys.stderr)
+            print(
+                "   or: sqlglider graph visualize graph.json -f plotly | python plotly_viewer.py",
+                file=sys.stderr,
+            )
             sys.exit(1)
         content = sys.stdin.read()
         if not content.strip():
             print("Error: No input received from stdin", file=sys.stderr)
             print("Note: On Windows, piping may not work reliably.", file=sys.stderr)
-            print("Try: sqlglider graph query ... -f plotly -o output.json", file=sys.stderr)
+            print(
+                "Try: sqlglider graph query ... -f plotly -o output.json",
+                file=sys.stderr,
+            )
             print("Then: python plotly_viewer.py output.json", file=sys.stderr)
             sys.exit(1)
     else:
@@ -55,7 +61,10 @@ def load_figure(source: str | Path | None = None) -> dict:
             except UnicodeDecodeError:
                 continue
         else:
-            print(f"Error: Could not decode file with UTF-8 or UTF-16 encoding", file=sys.stderr)
+            print(
+                "Error: Could not decode file with UTF-8 or UTF-16 encoding",
+                file=sys.stderr,
+            )
             sys.exit(1)
 
     try:
