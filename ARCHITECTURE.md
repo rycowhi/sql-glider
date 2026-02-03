@@ -23,6 +23,7 @@ sql-glider/
 │       │   ├── builder.py           # GraphBuilder for creating graphs from SQL
 │       │   ├── merge.py             # GraphMerger for combining graphs
 │       │   ├── query.py             # GraphQuerier for upstream/downstream analysis
+│       │   ├── diagram_formatters.py # Mermaid and DOT diagram output formatters
 │       │   └── serialization.py     # JSON save/load, rustworkx conversion
 │       ├── lineage/
 │       │   ├── __init__.py          # Lineage module exports
@@ -447,6 +448,15 @@ sqlglider graph merge --glob "*.json" -o merged.json
 # Query lineage
 sqlglider graph query graph.json --upstream orders.customer_id
 sqlglider graph query graph.json --downstream customers.id -f json
+
+# Query with diagram output (Mermaid or DOT)
+sqlglider graph query graph.json --upstream orders.customer_id -f mermaid
+sqlglider graph query graph.json --downstream customers.id -f dot
+
+# Visualize entire graph as diagram
+sqlglider graph visualize graph.json              # Mermaid (default)
+sqlglider graph visualize graph.json -f dot       # DOT/Graphviz
+sqlglider graph visualize graph.json -o lineage.mmd
 ```
 
 ### 5. Dissection Module (`dissection/`)

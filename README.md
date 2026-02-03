@@ -381,6 +381,17 @@ uv run sqlglider graph query graph.json --upstream orders.customer_id
 
 # Query downstream dependencies (find all columns affected by a source)
 uv run sqlglider graph query graph.json --downstream customers.id
+
+# Query with Mermaid diagram output
+uv run sqlglider graph query graph.json --upstream orders.customer_id -f mermaid
+
+# Query with DOT (Graphviz) diagram output
+uv run sqlglider graph query graph.json --downstream customers.id -f dot
+
+# Visualize entire graph as a diagram
+uv run sqlglider graph visualize graph.json                    # Mermaid (default)
+uv run sqlglider graph visualize graph.json -f dot             # DOT/Graphviz
+uv run sqlglider graph visualize graph.json -o lineage.mmd     # Save to file
 ```
 
 **Example Upstream Query Output:**

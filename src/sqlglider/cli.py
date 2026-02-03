@@ -1642,7 +1642,7 @@ def graph_query(
         "text",
         "--output-format",
         "-f",
-        help="Output format: 'text', 'json', or 'csv'",
+        help="Output format: 'text', 'json', 'csv', 'mermaid', 'mermaid-markdown', or 'dot'",
     ),
 ) -> None:
     """
@@ -1678,10 +1678,10 @@ def graph_query(
         )
         raise typer.Exit(1)
 
-    if output_format not in ["text", "json", "csv"]:
+    if output_format not in ["text", "json", "csv", "mermaid", "mermaid-markdown", "dot"]:
         err_console.print(
             f"[red]Error:[/red] Invalid output format '{output_format}'. "
-            "Use 'text', 'json', or 'csv'."
+            "Use 'text', 'json', 'csv', 'mermaid', 'mermaid-markdown', or 'dot'."
         )
         raise typer.Exit(1)
 
@@ -1699,8 +1699,20 @@ def graph_query(
             _format_query_result_text(result)
         elif output_format == "json":
             _format_query_result_json(result)
-        else:  # csv
+        elif output_format == "csv":
             _format_query_result_csv(result)
+        elif output_format == "mermaid":
+            from sqlglider.graph.diagram_formatters import MermaidFormatter
+
+            print(MermaidFormatter.format_query_result(result))
+        elif output_format == "mermaid-markdown":
+            from sqlglider.graph.diagram_formatters import MermaidMarkdownFormatter
+
+            print(MermaidMarkdownFormatter.format_query_result(result))
+        elif output_format == "dot":
+            from sqlglider.graph.diagram_formatters import DotFormatter
+
+            print(DotFormatter.format_query_result(result))
 
     except FileNotFoundError as e:
         err_console.print(f"[red]Error:[/red] {e}")
@@ -1793,6 +1805,91 @@ def _format_query_result_csv(result) -> None:
             f"{'true' if node.is_leaf else 'false'},"
             f'"{paths_str}","{file_path}",{node.query_index}'
         )
+
+
+@graph_app.command("visualize")
+def graph_visualize(
+    graph_file: Path = typer.Argument(
+        ...,
+        exists=True,
+        help="Path to graph JSON file",
+    ),
+    output_format: str = typer.Option(
+        "mermaid",
+        "--output-format",
+        "-f",
+        help="Diagram format: 'mermaid', 'mermaid-markdown', or 'dot'",
+    ),
+    output_file: Optional[Path] = typer.Option(
+        None,
+        "--output-file",
+        "-o",
+        help="Write diagram to file instead of stdout",
+    ),
+) -> None:
+    """
+    Visualize the entire lineage graph as a diagram.
+
+    Generates Mermaid or DOT (Graphviz) diagrams showing all nodes and edges
+    in the graph for visualization tools.
+
+    Examples:
+
+        # Generate Mermaid diagram
+        sqlglider graph visualize graph.json
+
+        # Generate DOT diagram for Graphviz
+        sqlglider graph visualize graph.json -f dot
+
+        # Save to file
+        sqlglider graph visualize graph.json -o lineage.mmd
+
+        # Render DOT to PNG with Graphviz
+        sqlglider graph visualize graph.json -f dot -o lineage.dot
+    """
+    from sqlglider.graph.diagram_formatters import (
+        DotFormatter,
+        MermaidFormatter,
+        MermaidMarkdownFormatter,
+    )
+    from sqlglider.graph.serialization import load_graph
+
+    if output_format not in ["mermaid", "mermaid-markdown", "dot"]:
+        err_console.print(
+            f"[red]Error:[/red] Invalid output format '{output_format}'. "
+            "Use 'mermaid', 'mermaid-markdown', or 'dot'."
+        )
+        raise typer.Exit(1)
+
+    try:
+        graph = load_graph(graph_file)
+
+        if output_format == "mermaid":
+            diagram = MermaidFormatter.format_full_graph(graph)
+        elif output_format == "mermaid-markdown":
+            diagram = MermaidMarkdownFormatter.format_full_graph(graph)
+        else:
+            diagram = DotFormatter.format_full_graph(graph)
+
+        if output_file:
+            output_file.write_text(diagram, encoding="utf-8")
+            console.print(
+                f"[green]Success:[/green] Diagram written to {output_file}"
+            )
+        else:
+            print(diagram)
+
+    except FileNotFoundError as e:
+        err_console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+
+    except ValueError as e:
+        err_console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+
+    except Exception as e:
+        err_console.print(f"[red]Error:[/red] Unexpected error: {e}")
+        raise typer.Exit(1)
 
 
 @app.command()

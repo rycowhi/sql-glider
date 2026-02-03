@@ -67,6 +67,7 @@ src/sqlglider/
 │   ├── builder.py            # Build lineage graphs from SQL files
 │   ├── merge.py              # Merge multiple graphs
 │   ├── query.py              # Query upstream/downstream lineage
+│   ├── diagram_formatters.py # Mermaid and DOT diagram output formatters
 │   ├── models.py             # Graph data models (Pydantic)
 │   └── serialization.py      # JSON save/load for graphs
 ├── lineage/
@@ -268,6 +269,22 @@ uv run sqlglider graph query graph.json --upstream orders.total -f json
 
 # Query with CSV output
 uv run sqlglider graph query graph.json --downstream customers.id -f csv
+
+# Query with Mermaid diagram output
+uv run sqlglider graph query graph.json --upstream orders.total -f mermaid
+
+# Query with DOT (Graphviz) diagram output
+uv run sqlglider graph query graph.json --downstream customers.id -f dot
+
+# Visualize entire graph as Mermaid diagram
+uv run sqlglider graph visualize graph.json
+
+# Visualize entire graph as DOT diagram
+uv run sqlglider graph visualize graph.json -f dot
+
+# Save diagram to file
+uv run sqlglider graph visualize graph.json -o lineage.mmd
+uv run sqlglider graph visualize graph.json -f dot -o lineage.dot
 ```
 
 ### SQL Templating

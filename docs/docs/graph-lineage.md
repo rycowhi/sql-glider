@@ -219,6 +219,109 @@ Each entry in `columns` tells you:
       | jq -r '.columns[] | select(.is_root) | .table'
     ```
 
+## Visualizing Lineage
+
+SQL Glider can generate diagrams from lineage graphs in [Mermaid](https://mermaid.js.org/) and [DOT (Graphviz)](https://graphviz.org/doc/info/lang.html) formats. These are text-based diagram languages that render in many tools — Mermaid works natively in GitHub Markdown, GitLab, Notion, and more; DOT can be rendered with Graphviz into SVG, PNG, or PDF.
+
+### Visualize an Entire Graph
+
+The `graph visualize` command renders every node and edge in a graph file:
+
+```bash
+# Mermaid (default)
+sqlglider graph visualize graph.json
+
+# DOT (Graphviz)
+sqlglider graph visualize graph.json -f dot
+
+# Save to file
+sqlglider graph visualize graph.json -o lineage.mmd
+sqlglider graph visualize graph.json -f dot -o lineage.dot
+```
+
+### Diagram Output from Queries
+
+The `graph query` command also supports diagram formats. This is useful for visualizing just the upstream or downstream subgraph for a specific column:
+
+```bash
+# Mermaid diagram of upstream sources
+sqlglider graph query graph.json --upstream total_spent -f mermaid
+
+# DOT diagram of downstream impact
+sqlglider graph query graph.json --downstream orders.order_total -f dot
+```
+
+Query diagrams include color-coded nodes and a legend:
+
+| Color  | Meaning |
+|--------|---------|
+| Amber  | The queried column |
+| Teal   | Root node (no upstream dependencies) |
+| Violet | Leaf node (no downstream consumers) |
+
+**Example:** Imagine a pipeline where a `revenue` report column draws from multiple sources through several transformation layers. Querying `--upstream revenue` would produce a diagram like this:
+
+```mermaid
+flowchart TD
+    raw_orders_amount["raw_orders.amount"]
+    raw_orders_tax["raw_orders.tax"]
+    raw_exchange_rates_rate["raw_exchange_rates.rate"]
+    staging_orders_subtotal["staging_orders.subtotal"]
+    staging_orders_tax_amount["staging_orders.tax_amount"]
+    mart_orders_total_usd["mart_orders.total_usd"]
+    revenue["revenue"]
+    raw_orders_amount --> staging_orders_subtotal
+    raw_orders_tax --> staging_orders_tax_amount
+    staging_orders_subtotal --> mart_orders_total_usd
+    staging_orders_tax_amount --> mart_orders_total_usd
+    raw_exchange_rates_rate --> mart_orders_total_usd
+    mart_orders_total_usd --> revenue
+
+    style revenue fill:#e6a843,stroke:#b8860b,stroke-width:3px
+    style raw_orders_amount fill:#4ecdc4,stroke:#2b9e96
+    style raw_orders_tax fill:#4ecdc4,stroke:#2b9e96
+    style raw_exchange_rates_rate fill:#4ecdc4,stroke:#2b9e96
+
+    subgraph Legend
+        legend_queried["Queried Column"]
+        legend_root["Root (no upstream)"]
+        legend_leaf["Leaf (no downstream)"]
+    end
+    style legend_queried fill:#e6a843,stroke:#b8860b,stroke-width:3px
+    style legend_root fill:#4ecdc4,stroke:#2b9e96
+    style legend_leaf fill:#c084fc,stroke:#7c3aed
+```
+
+The amber node is the column you queried (`revenue`), teal nodes are ultimate root sources with no further upstream dependencies (`raw_orders.amount`, `raw_orders.tax`, `raw_exchange_rates.rate`), and intermediate nodes (`staging_orders.*`, `mart_orders.*`) appear in the default style. The legend is included automatically.
+
+### Mermaid Markdown Format
+
+The `mermaid-markdown` format wraps the diagram in a fenced code block, ready to paste directly into a `.md` file:
+
+```bash
+# Output a markdown-ready Mermaid block
+sqlglider graph query graph.json --upstream total_spent -f mermaid-markdown
+
+# Works with visualize too
+sqlglider graph visualize graph.json -f mermaid-markdown -o lineage.md
+```
+
+This produces output with the `` ```mermaid `` fence included, so the diagram renders automatically when viewed in GitHub, GitLab, or any markdown tool with Mermaid support.
+
+### Rendering Diagrams
+
+**Mermaid:**
+
+- Paste into any GitHub Markdown file or issue — it renders automatically
+- Use the [Mermaid Live Editor](https://mermaid.live/) for interactive previewing
+- Install [mermaid-cli](https://github.com/mermaid-js/mermaid-cli) for local PNG/SVG export: `mmdc -i lineage.mmd -o lineage.png`
+
+**DOT (Graphviz):**
+
+- Install [Graphviz](https://graphviz.org/download/) and render with: `dot -Tpng lineage.dot -o lineage.png`
+- Use `-Tsvg` for scalable vector output
+- Many IDEs have Graphviz preview extensions
+
 ## Building Graphs from Multiple Sources
 
 ### Explicit File List
