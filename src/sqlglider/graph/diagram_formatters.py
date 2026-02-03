@@ -1,7 +1,9 @@
-"""Diagram formatters for lineage graphs (Mermaid and DOT/Graphviz)."""
+"""Diagram formatters for lineage graphs (Mermaid, DOT/Graphviz, and Plotly)."""
 
+import json
 import re
-from typing import Set
+from collections import defaultdict
+from typing import Any, Set
 
 from sqlglider.graph.models import LineageGraph
 from sqlglider.graph.query import LineageQueryResult
@@ -328,3 +330,329 @@ class DotFormatter:
 
         lines.append("}")
         return "\n".join(lines)
+
+
+def _compute_layered_layout(
+    nodes: list[str],
+    edges: list[tuple[str, str]],
+) -> dict[str, tuple[float, float]]:
+    """Compute layered layout positions for nodes using topological ordering.
+
+    Positions nodes in layers from left to right based on their dependencies.
+    Nodes with no incoming edges are placed in layer 0, their dependents in
+    layer 1, etc.
+
+    Args:
+        nodes: List of node identifiers
+        edges: List of (source, target) edge tuples
+
+    Returns:
+        Dictionary mapping node identifiers to (x, y) positions
+    """
+    if not nodes:
+        return {}
+
+    # Build adjacency structures
+    incoming: dict[str, set[str]] = defaultdict(set)
+    outgoing: dict[str, set[str]] = defaultdict(set)
+    for src, tgt in edges:
+        outgoing[src].add(tgt)
+        incoming[tgt].add(src)
+
+    # Assign layers via modified Kahn's algorithm
+    layers: dict[str, int] = {}
+    node_set = set(nodes)
+
+    # Start with nodes that have no incoming edges (roots)
+    current_layer = [n for n in nodes if not incoming[n]]
+    if not current_layer:
+        # Cycle detected or all nodes have incoming edges, use first node
+        current_layer = [nodes[0]]
+
+    layer_num = 0
+    while current_layer:
+        next_layer = []
+        for node in current_layer:
+            if node not in layers:
+                layers[node] = layer_num
+            for child in outgoing[node]:
+                if child in node_set and child not in layers:
+                    # Check if all parents are assigned
+                    if all(p in layers for p in incoming[child]):
+                        next_layer.append(child)
+        layer_num += 1
+        current_layer = next_layer
+
+    # Assign any remaining unvisited nodes to the last layer
+    for node in nodes:
+        if node not in layers:
+            layers[node] = layer_num
+
+    # Group nodes by layer for vertical positioning
+    layer_groups: dict[int, list[str]] = defaultdict(list)
+    for node, layer in layers.items():
+        layer_groups[layer].append(node)
+
+    # Compute positions: x based on layer, y spread vertically within layer
+    positions: dict[str, tuple[float, float]] = {}
+    max_layer = max(layers.values()) if layers else 0
+    x_spacing = 1.0 if max_layer == 0 else 1.0
+
+    for layer, layer_nodes in layer_groups.items():
+        x = layer * x_spacing
+        n = len(layer_nodes)
+        for i, node in enumerate(sorted(layer_nodes)):
+            # Center nodes vertically, spread them out
+            y = (i - (n - 1) / 2) * 0.5
+            positions[node] = (x, y)
+
+    return positions
+
+
+class PlotlyFormatter:
+    """Format lineage graphs as Plotly JSON figure specifications.
+
+    Generates JSON that can be loaded into Plotly/Dash applications using
+    plotly.io.from_json() or directly into dcc.Graph components.
+
+    Requires the 'plotly' optional dependency: pip install sql-glider[plotly]
+    """
+
+    @staticmethod
+    def _check_plotly_available() -> None:
+        """Check if plotly is installed, raise ImportError if not."""
+        try:
+            import plotly  # noqa: F401
+        except ImportError:
+            raise ImportError(
+                "Plotly is required for this output format. "
+                "Install it with: pip install sql-glider[plotly]"
+            )
+
+    @staticmethod
+    def format_full_graph(graph: LineageGraph) -> str:
+        """Format complete lineage graph as a Plotly JSON figure.
+
+        Args:
+            graph: LineageGraph with all nodes and edges
+
+        Returns:
+            JSON string representing a Plotly figure specification
+        """
+        PlotlyFormatter._check_plotly_available()
+
+        node_ids = [n.identifier for n in graph.nodes]
+        edge_tuples = [(e.source_node, e.target_node) for e in graph.edges]
+
+        if not node_ids:
+            # Empty graph
+            figure: dict[str, Any] = {
+                "data": [],
+                "layout": {
+                    "title": {"text": "Lineage Graph"},
+                    "showlegend": False,
+                    "xaxis": {"visible": False},
+                    "yaxis": {"visible": False},
+                },
+            }
+            return json.dumps(figure, indent=2)
+
+        positions = _compute_layered_layout(node_ids, edge_tuples)
+
+        # Build edge traces (one trace per edge for simplicity)
+        edge_traces: list[dict[str, Any]] = []
+        for src, tgt in edge_tuples:
+            if src in positions and tgt in positions:
+                x0, y0 = positions[src]
+                x1, y1 = positions[tgt]
+                edge_traces.append(
+                    {
+                        "type": "scatter",
+                        "x": [x0, x1, None],
+                        "y": [y0, y1, None],
+                        "mode": "lines",
+                        "line": {"width": 1, "color": "#888"},
+                        "hoverinfo": "none",
+                        "showlegend": False,
+                    }
+                )
+
+        # Build node trace
+        node_x = [positions[n][0] for n in node_ids if n in positions]
+        node_y = [positions[n][1] for n in node_ids if n in positions]
+        node_text = [n for n in node_ids if n in positions]
+
+        node_trace: dict[str, Any] = {
+            "type": "scatter",
+            "x": node_x,
+            "y": node_y,
+            "mode": "markers+text",
+            "text": node_text,
+            "textposition": "top center",
+            "hoverinfo": "text",
+            "marker": {
+                "size": 20,
+                "color": "#6495ED",
+                "line": {"width": 2, "color": "#4169E1"},
+            },
+            "showlegend": False,
+        }
+
+        figure = {
+            "data": edge_traces + [node_trace],
+            "layout": {
+                "title": {"text": "Lineage Graph"},
+                "showlegend": False,
+                "hovermode": "closest",
+                "xaxis": {"visible": False},
+                "yaxis": {"visible": False},
+                "margin": {"l": 40, "r": 40, "t": 60, "b": 40},
+            },
+        }
+
+        return json.dumps(figure, indent=2)
+
+    @staticmethod
+    def format_query_result(result: LineageQueryResult) -> str:
+        """Format query result as a Plotly JSON figure with styling.
+
+        The queried column is highlighted in amber, root nodes in teal,
+        and leaf nodes in violet, matching the Mermaid/DOT color scheme.
+
+        Args:
+            result: LineageQueryResult from upstream/downstream query
+
+        Returns:
+            JSON string representing a Plotly figure specification
+        """
+        PlotlyFormatter._check_plotly_available()
+
+        all_nodes = _collect_query_nodes(result)
+        edges = _collect_query_edges(result)
+
+        if not all_nodes:
+            # Should not happen, but handle gracefully
+            figure: dict[str, Any] = {
+                "data": [],
+                "layout": {
+                    "title": {"text": f"Lineage: {result.query_column}"},
+                    "showlegend": False,
+                    "xaxis": {"visible": False},
+                    "yaxis": {"visible": False},
+                },
+            }
+            return json.dumps(figure, indent=2)
+
+        node_list = sorted(all_nodes)
+        edge_list = list(edges)
+        positions = _compute_layered_layout(node_list, edge_list)
+
+        # Build styling lookup
+        root_ids: set[str] = set()
+        leaf_ids: set[str] = set()
+        for node in result.related_columns:
+            if node.is_root:
+                root_ids.add(node.identifier)
+            if node.is_leaf:
+                leaf_ids.add(node.identifier)
+
+        # Determine node colors
+        node_colors: list[str] = []
+        for node in node_list:
+            if node == result.query_column:
+                node_colors.append(QUERIED_FILL)
+            elif node in root_ids:
+                node_colors.append(ROOT_FILL)
+            elif node in leaf_ids:
+                node_colors.append(LEAF_FILL)
+            else:
+                node_colors.append("#6495ED")  # Default blue
+
+        # Build edge traces
+        edge_traces: list[dict[str, Any]] = []
+        for src, tgt in sorted(edges):
+            if src in positions and tgt in positions:
+                x0, y0 = positions[src]
+                x1, y1 = positions[tgt]
+                edge_traces.append(
+                    {
+                        "type": "scatter",
+                        "x": [x0, x1, None],
+                        "y": [y0, y1, None],
+                        "mode": "lines",
+                        "line": {"width": 1.5, "color": "#888"},
+                        "hoverinfo": "none",
+                        "showlegend": False,
+                    }
+                )
+
+        # Build node trace
+        node_x = [positions[n][0] for n in node_list if n in positions]
+        node_y = [positions[n][1] for n in node_list if n in positions]
+
+        node_trace: dict[str, Any] = {
+            "type": "scatter",
+            "x": node_x,
+            "y": node_y,
+            "mode": "markers+text",
+            "text": node_list,
+            "textposition": "top center",
+            "hoverinfo": "text",
+            "marker": {
+                "size": 20,
+                "color": node_colors,
+                "line": {"width": 2, "color": "#333"},
+            },
+            "showlegend": False,
+        }
+
+        # Build legend traces (invisible markers for legend display)
+        legend_traces: list[dict[str, Any]] = [
+            {
+                "type": "scatter",
+                "x": [None],
+                "y": [None],
+                "mode": "markers",
+                "marker": {"size": 12, "color": QUERIED_FILL},
+                "name": "Queried Column",
+                "showlegend": True,
+            },
+            {
+                "type": "scatter",
+                "x": [None],
+                "y": [None],
+                "mode": "markers",
+                "marker": {"size": 12, "color": ROOT_FILL},
+                "name": "Root (no upstream)",
+                "showlegend": True,
+            },
+            {
+                "type": "scatter",
+                "x": [None],
+                "y": [None],
+                "mode": "markers",
+                "marker": {"size": 12, "color": LEAF_FILL},
+                "name": "Leaf (no downstream)",
+                "showlegend": True,
+            },
+        ]
+
+        direction_label = (
+            "Upstream" if result.direction == "upstream" else "Downstream"
+        )
+        title = f"{direction_label} Lineage: {result.query_column}"
+
+        figure = {
+            "data": edge_traces + [node_trace] + legend_traces,
+            "layout": {
+                "title": {"text": title},
+                "showlegend": True,
+                "legend": {"x": 1, "y": 1, "xanchor": "right"},
+                "hovermode": "closest",
+                "xaxis": {"visible": False},
+                "yaxis": {"visible": False},
+                "margin": {"l": 40, "r": 40, "t": 60, "b": 40},
+            },
+        }
+
+        return json.dumps(figure, indent=2)

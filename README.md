@@ -388,10 +388,31 @@ uv run sqlglider graph query graph.json --upstream orders.customer_id -f mermaid
 # Query with DOT (Graphviz) diagram output
 uv run sqlglider graph query graph.json --downstream customers.id -f dot
 
+# Query with Plotly JSON output (for interactive visualization)
+uv run sqlglider graph query graph.json --upstream orders.customer_id -f plotly
+
 # Visualize entire graph as a diagram
 uv run sqlglider graph visualize graph.json                    # Mermaid (default)
 uv run sqlglider graph visualize graph.json -f dot             # DOT/Graphviz
+uv run sqlglider graph visualize graph.json -f plotly          # Plotly JSON
 uv run sqlglider graph visualize graph.json -o lineage.mmd     # Save to file
+```
+
+> **Note:** Plotly output requires an optional dependency. Install with: `pip install sql-glider[plotly]`
+
+The Plotly JSON output can be loaded into Plotly/Dash applications for interactive visualization:
+
+```python
+import plotly.io as pio
+from dash import Dash, dcc, html
+
+# Load the JSON output
+with open("lineage.json") as f:
+    fig = pio.from_json(f.read())
+
+# Use in a Dash app
+app = Dash(__name__)
+app.layout = html.Div([dcc.Graph(figure=fig)])
 ```
 
 **Example Upstream Query Output:**
@@ -679,12 +700,24 @@ Arguments:
 Options:
   --upstream, -u              Find source columns for this column [optional]
   --downstream, -d            Find affected columns for this source [optional]
-  --output-format, -f         Output format: 'text', 'json', or 'csv' [default: text]
+  --output-format, -f         Output format: 'text', 'json', 'csv', 'mermaid', 'mermaid-markdown', 'dot', or 'plotly' [default: text]
+```
+
+```
+sqlglider graph visualize <graph_file> [OPTIONS]
+
+Arguments:
+  graph_file                  Path to graph JSON file [required]
+
+Options:
+  --output-format, -f         Diagram format: 'mermaid', 'mermaid-markdown', 'dot', or 'plotly' [default: mermaid]
+  --output-file, -o           Write diagram to file instead of stdout [optional]
 ```
 
 **Notes:**
 - `--upstream` and `--downstream` are mutually exclusive. Use one or the other.
 - Graph queries are case-insensitive for column matching.
+- Plotly output requires optional dependency: `pip install sql-glider[plotly]`
 
 ## Output Formats
 
@@ -888,6 +921,21 @@ UV_PUBLISH_TOKEN=pypi-...
 - **rich:** Terminal formatting and colored output
 - **pydantic:** Data validation and serialization
 - **rustworkx:** High-performance graph library for cross-file lineage analysis
+
+### Optional Dependencies
+
+Install optional features with extras:
+
+```bash
+# Databricks catalog integration
+pip install sql-glider[databricks]
+
+# Plotly interactive visualization
+pip install sql-glider[plotly]
+
+# Install multiple extras
+pip install sql-glider[databricks,plotly]
+```
 
 ## References
 

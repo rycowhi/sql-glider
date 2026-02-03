@@ -276,16 +276,25 @@ uv run sqlglider graph query graph.json --upstream orders.total -f mermaid
 # Query with DOT (Graphviz) diagram output
 uv run sqlglider graph query graph.json --downstream customers.id -f dot
 
+# Query with Plotly JSON output (for Dash/Plotly apps)
+uv run sqlglider graph query graph.json --upstream orders.total -f plotly
+
 # Visualize entire graph as Mermaid diagram
 uv run sqlglider graph visualize graph.json
 
 # Visualize entire graph as DOT diagram
 uv run sqlglider graph visualize graph.json -f dot
 
+# Visualize entire graph as Plotly JSON
+uv run sqlglider graph visualize graph.json -f plotly
+
 # Save diagram to file
 uv run sqlglider graph visualize graph.json -o lineage.mmd
 uv run sqlglider graph visualize graph.json -f dot -o lineage.dot
+uv run sqlglider graph visualize graph.json -f plotly -o lineage.json
 ```
+
+**Note:** Plotly output requires the optional dependency: `pip install sql-glider[plotly]`
 
 ### SQL Templating
 

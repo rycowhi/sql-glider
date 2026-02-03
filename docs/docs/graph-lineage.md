@@ -221,7 +221,7 @@ Each entry in `columns` tells you:
 
 ## Visualizing Lineage
 
-SQL Glider can generate diagrams from lineage graphs in [Mermaid](https://mermaid.js.org/) and [DOT (Graphviz)](https://graphviz.org/doc/info/lang.html) formats. These are text-based diagram languages that render in many tools — Mermaid works natively in GitHub Markdown, GitLab, Notion, and more; DOT can be rendered with Graphviz into SVG, PNG, or PDF.
+SQL Glider can generate diagrams from lineage graphs in [Mermaid](https://mermaid.js.org/), [DOT (Graphviz)](https://graphviz.org/doc/info/lang.html), and [Plotly](https://plotly.com/python/) formats. Mermaid and DOT are text-based diagram languages that render in many tools — Mermaid works natively in GitHub Markdown, GitLab, Notion, and more; DOT can be rendered with Graphviz into SVG, PNG, or PDF. Plotly outputs JSON that can be loaded into interactive Plotly/Dash applications.
 
 ### Visualize an Entire Graph
 
@@ -234,9 +234,13 @@ sqlglider graph visualize graph.json
 # DOT (Graphviz)
 sqlglider graph visualize graph.json -f dot
 
+# Plotly JSON (for interactive visualization)
+sqlglider graph visualize graph.json -f plotly
+
 # Save to file
 sqlglider graph visualize graph.json -o lineage.mmd
 sqlglider graph visualize graph.json -f dot -o lineage.dot
+sqlglider graph visualize graph.json -f plotly -o lineage.json
 ```
 
 ### Diagram Output from Queries
@@ -249,6 +253,9 @@ sqlglider graph query graph.json --upstream total_spent -f mermaid
 
 # DOT diagram of downstream impact
 sqlglider graph query graph.json --downstream orders.order_total -f dot
+
+# Plotly JSON for interactive exploration
+sqlglider graph query graph.json --upstream total_spent -f plotly
 ```
 
 Query diagrams include color-coded nodes and a legend:
@@ -308,6 +315,47 @@ sqlglider graph visualize graph.json -f mermaid-markdown -o lineage.md
 
 This produces output with the `` ```mermaid `` fence included, so the diagram renders automatically when viewed in GitHub, GitLab, or any markdown tool with Mermaid support.
 
+### Plotly Interactive Visualization
+
+The `plotly` format outputs a JSON figure specification that can be loaded into [Plotly](https://plotly.com/python/) or [Dash](https://dash.plotly.com/) applications for interactive visualization with zooming, panning, and hover details.
+
+!!! warning "Optional Dependency"
+
+    Plotly output requires an optional dependency. Install it with:
+
+    ```bash
+    pip install sql-glider[plotly]
+    ```
+
+**Example usage with Dash:**
+
+```python
+import plotly.io as pio
+from dash import Dash, dcc, html
+
+# Load the JSON output from sqlglider
+with open("lineage.json") as f:
+    fig = pio.from_json(f.read())
+
+# Create an interactive Dash app
+app = Dash(__name__)
+app.layout = html.Div([
+    html.H1("Lineage Graph"),
+    dcc.Graph(figure=fig, style={"height": "80vh"})
+])
+
+if __name__ == "__main__":
+    app.run(debug=True)
+```
+
+The Plotly output uses the same color scheme as Mermaid and DOT diagrams:
+
+| Color  | Meaning |
+|--------|---------|
+| Amber  | The queried column |
+| Teal   | Root node (no upstream dependencies) |
+| Violet | Leaf node (no downstream consumers) |
+
 ### Rendering Diagrams
 
 **Mermaid:**
@@ -321,6 +369,12 @@ This produces output with the `` ```mermaid `` fence included, so the diagram re
 - Install [Graphviz](https://graphviz.org/download/) and render with: `dot -Tpng lineage.dot -o lineage.png`
 - Use `-Tsvg` for scalable vector output
 - Many IDEs have Graphviz preview extensions
+
+**Plotly:**
+
+- Load the JSON into any Plotly-compatible environment (Python, Dash, Jupyter notebooks)
+- SQL Glider includes a viewer script: `python examples/plotly_viewer.py lineage.json`
+- Export to static images with `fig.write_image("lineage.png")`
 
 ## Building Graphs from Multiple Sources
 

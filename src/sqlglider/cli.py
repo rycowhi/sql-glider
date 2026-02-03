@@ -1642,7 +1642,7 @@ def graph_query(
         "text",
         "--output-format",
         "-f",
-        help="Output format: 'text', 'json', 'csv', 'mermaid', 'mermaid-markdown', or 'dot'",
+        help="Output format: 'text', 'json', 'csv', 'mermaid', 'mermaid-markdown', 'dot', or 'plotly'",
     ),
 ) -> None:
     """
@@ -1661,6 +1661,9 @@ def graph_query(
 
         # CSV output
         sqlglider graph query graph.json --downstream orders.order_id -f csv
+
+        # Plotly JSON output (for Dash/Plotly visualization)
+        sqlglider graph query graph.json --upstream orders.total -f plotly
     """
     from sqlglider.graph.query import GraphQuerier
 
@@ -1685,10 +1688,11 @@ def graph_query(
         "mermaid",
         "mermaid-markdown",
         "dot",
+        "plotly",
     ]:
         err_console.print(
             f"[red]Error:[/red] Invalid output format '{output_format}'. "
-            "Use 'text', 'json', 'csv', 'mermaid', 'mermaid-markdown', or 'dot'."
+            "Use 'text', 'json', 'csv', 'mermaid', 'mermaid-markdown', 'dot', or 'plotly'."
         )
         raise typer.Exit(1)
 
@@ -1720,6 +1724,14 @@ def graph_query(
             from sqlglider.graph.diagram_formatters import DotFormatter
 
             print(DotFormatter.format_query_result(result))
+        elif output_format == "plotly":
+            from sqlglider.graph.diagram_formatters import PlotlyFormatter
+
+            print(PlotlyFormatter.format_query_result(result))
+
+    except ImportError as e:
+        err_console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
 
     except FileNotFoundError as e:
         err_console.print(f"[red]Error:[/red] {e}")
@@ -1825,7 +1837,7 @@ def graph_visualize(
         "mermaid",
         "--output-format",
         "-f",
-        help="Diagram format: 'mermaid', 'mermaid-markdown', or 'dot'",
+        help="Diagram format: 'mermaid', 'mermaid-markdown', 'dot', or 'plotly'",
     ),
     output_file: Optional[Path] = typer.Option(
         None,
@@ -1837,8 +1849,8 @@ def graph_visualize(
     """
     Visualize the entire lineage graph as a diagram.
 
-    Generates Mermaid or DOT (Graphviz) diagrams showing all nodes and edges
-    in the graph for visualization tools.
+    Generates Mermaid, DOT (Graphviz), or Plotly JSON diagrams showing all
+    nodes and edges in the graph for visualization tools.
 
     Examples:
 
@@ -1853,18 +1865,16 @@ def graph_visualize(
 
         # Render DOT to PNG with Graphviz
         sqlglider graph visualize graph.json -f dot -o lineage.dot
+
+        # Generate Plotly JSON for Dash/Plotly apps
+        sqlglider graph visualize graph.json -f plotly -o lineage.json
     """
-    from sqlglider.graph.diagram_formatters import (
-        DotFormatter,
-        MermaidFormatter,
-        MermaidMarkdownFormatter,
-    )
     from sqlglider.graph.serialization import load_graph
 
-    if output_format not in ["mermaid", "mermaid-markdown", "dot"]:
+    if output_format not in ["mermaid", "mermaid-markdown", "dot", "plotly"]:
         err_console.print(
             f"[red]Error:[/red] Invalid output format '{output_format}'. "
-            "Use 'mermaid', 'mermaid-markdown', or 'dot'."
+            "Use 'mermaid', 'mermaid-markdown', 'dot', or 'plotly'."
         )
         raise typer.Exit(1)
 
@@ -1872,17 +1882,31 @@ def graph_visualize(
         graph = load_graph(graph_file)
 
         if output_format == "mermaid":
+            from sqlglider.graph.diagram_formatters import MermaidFormatter
+
             diagram = MermaidFormatter.format_full_graph(graph)
         elif output_format == "mermaid-markdown":
+            from sqlglider.graph.diagram_formatters import MermaidMarkdownFormatter
+
             diagram = MermaidMarkdownFormatter.format_full_graph(graph)
-        else:
+        elif output_format == "dot":
+            from sqlglider.graph.diagram_formatters import DotFormatter
+
             diagram = DotFormatter.format_full_graph(graph)
+        else:  # plotly
+            from sqlglider.graph.diagram_formatters import PlotlyFormatter
+
+            diagram = PlotlyFormatter.format_full_graph(graph)
 
         if output_file:
             output_file.write_text(diagram, encoding="utf-8")
             console.print(f"[green]Success:[/green] Diagram written to {output_file}")
         else:
             print(diagram)
+
+    except ImportError as e:
+        err_console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
 
     except FileNotFoundError as e:
         err_console.print(f"[red]Error:[/red] {e}")

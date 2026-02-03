@@ -1,4 +1,6 @@
-"""Tests for diagram formatters (Mermaid and DOT)."""
+"""Tests for diagram formatters (Mermaid, DOT, and Plotly)."""
+
+import json
 
 import pytest
 
@@ -9,8 +11,10 @@ from sqlglider.graph.diagram_formatters import (
     DotFormatter,
     MermaidFormatter,
     MermaidMarkdownFormatter,
+    PlotlyFormatter,
     _collect_query_edges,
     _collect_query_nodes,
+    _compute_layered_layout,
     _quote_dot_id,
     _sanitize_mermaid_id,
 )
@@ -412,3 +416,285 @@ class TestMermaidMarkdownFormatterQueryResult:
         mermaid = MermaidFormatter.format_query_result(upstream_query_result)
         markdown = MermaidMarkdownFormatter.format_query_result(upstream_query_result)
         assert markdown == f"```mermaid\n{mermaid}\n```"
+
+
+# --- Layout algorithm tests ---
+
+
+class TestComputeLayeredLayout:
+    """Tests for _compute_layered_layout helper function."""
+
+    def test_empty_nodes(self):
+        positions = _compute_layered_layout([], [])
+        assert positions == {}
+
+    def test_single_node(self):
+        positions = _compute_layered_layout(["a"], [])
+        assert "a" in positions
+        assert positions["a"] == (0, 0.0)
+
+    def test_linear_chain(self):
+        nodes = ["a", "b", "c"]
+        edges = [("a", "b"), ("b", "c")]
+        positions = _compute_layered_layout(nodes, edges)
+
+        # a should be at layer 0, b at layer 1, c at layer 2
+        assert positions["a"][0] < positions["b"][0]
+        assert positions["b"][0] < positions["c"][0]
+
+    def test_diamond_layout(self):
+        nodes = ["a", "b", "c", "d"]
+        edges = [("a", "b"), ("a", "c"), ("b", "d"), ("c", "d")]
+        positions = _compute_layered_layout(nodes, edges)
+
+        # a at layer 0, b and c at layer 1, d at layer 2
+        assert positions["a"][0] < positions["b"][0]
+        assert positions["a"][0] < positions["c"][0]
+        assert positions["b"][0] < positions["d"][0]
+        assert positions["c"][0] < positions["d"][0]
+        # b and c should be at the same x position
+        assert positions["b"][0] == positions["c"][0]
+
+    def test_multiple_roots(self):
+        nodes = ["a", "b", "c"]
+        edges = [("a", "c"), ("b", "c")]
+        positions = _compute_layered_layout(nodes, edges)
+
+        # a and b should be at layer 0, c at layer 1
+        assert positions["a"][0] == positions["b"][0]
+        assert positions["a"][0] < positions["c"][0]
+
+
+# --- PlotlyFormatter tests ---
+
+
+@pytest.fixture
+def plotly_available():
+    """Check if plotly is available for testing."""
+    try:
+        import plotly  # noqa: F401
+
+        return True
+    except ImportError:
+        return False
+
+
+class TestPlotlyFormatterFullGraph:
+    """Tests for PlotlyFormatter.format_full_graph."""
+
+    def test_empty_graph(self, empty_graph, plotly_available):
+        if not plotly_available:
+            pytest.skip("plotly not installed")
+
+        result = PlotlyFormatter.format_full_graph(empty_graph)
+        figure = json.loads(result)
+
+        assert "data" in figure
+        assert "layout" in figure
+        assert figure["data"] == []
+        assert figure["layout"]["title"]["text"] == "Lineage Graph"
+
+    def test_linear_graph_has_valid_json(self, linear_graph, plotly_available):
+        if not plotly_available:
+            pytest.skip("plotly not installed")
+
+        result = PlotlyFormatter.format_full_graph(linear_graph)
+        figure = json.loads(result)
+
+        assert "data" in figure
+        assert "layout" in figure
+        assert len(figure["data"]) > 0
+
+    def test_linear_graph_has_edge_traces(self, linear_graph, plotly_available):
+        if not plotly_available:
+            pytest.skip("plotly not installed")
+
+        result = PlotlyFormatter.format_full_graph(linear_graph)
+        figure = json.loads(result)
+
+        # Should have edge traces (lines) plus one node trace
+        edge_traces = [t for t in figure["data"] if t.get("mode") == "lines"]
+        assert len(edge_traces) == 2  # Two edges in linear graph
+
+    def test_linear_graph_has_node_trace(self, linear_graph, plotly_available):
+        if not plotly_available:
+            pytest.skip("plotly not installed")
+
+        result = PlotlyFormatter.format_full_graph(linear_graph)
+        figure = json.loads(result)
+
+        # Find node trace (markers+text mode)
+        node_traces = [
+            t for t in figure["data"] if t.get("mode") == "markers+text"
+        ]
+        assert len(node_traces) == 1
+
+        # Should have 3 nodes
+        node_trace = node_traces[0]
+        assert len(node_trace["x"]) == 3
+        assert len(node_trace["y"]) == 3
+        assert len(node_trace["text"]) == 3
+
+    def test_diamond_graph_has_correct_edges(self, diamond_graph, plotly_available):
+        if not plotly_available:
+            pytest.skip("plotly not installed")
+
+        result = PlotlyFormatter.format_full_graph(diamond_graph)
+        figure = json.loads(result)
+
+        edge_traces = [t for t in figure["data"] if t.get("mode") == "lines"]
+        assert len(edge_traces) == 4  # Four edges in diamond
+
+    def test_layout_has_hidden_axes(self, linear_graph, plotly_available):
+        if not plotly_available:
+            pytest.skip("plotly not installed")
+
+        result = PlotlyFormatter.format_full_graph(linear_graph)
+        figure = json.loads(result)
+
+        assert figure["layout"]["xaxis"]["visible"] is False
+        assert figure["layout"]["yaxis"]["visible"] is False
+
+
+class TestPlotlyFormatterQueryResult:
+    """Tests for PlotlyFormatter.format_query_result."""
+
+    def test_empty_result_has_valid_json(self, empty_query_result, plotly_available):
+        if not plotly_available:
+            pytest.skip("plotly not installed")
+
+        result = PlotlyFormatter.format_query_result(empty_query_result)
+        figure = json.loads(result)
+
+        assert "data" in figure
+        assert "layout" in figure
+
+    def test_upstream_has_edges(self, upstream_query_result, plotly_available):
+        if not plotly_available:
+            pytest.skip("plotly not installed")
+
+        result = PlotlyFormatter.format_query_result(upstream_query_result)
+        figure = json.loads(result)
+
+        edge_traces = [t for t in figure["data"] if t.get("mode") == "lines"]
+        assert len(edge_traces) == 2  # source->mid, mid->target
+
+    def test_queried_node_has_amber_color(self, upstream_query_result, plotly_available):
+        if not plotly_available:
+            pytest.skip("plotly not installed")
+
+        result = PlotlyFormatter.format_query_result(upstream_query_result)
+        figure = json.loads(result)
+
+        node_traces = [
+            t for t in figure["data"] if t.get("mode") == "markers+text"
+        ]
+        assert len(node_traces) == 1
+
+        node_trace = node_traces[0]
+        colors = node_trace["marker"]["color"]
+        # target.col is the queried column and should be amber
+        assert QUERIED_FILL in colors
+
+    def test_root_node_has_teal_color(self, upstream_query_result, plotly_available):
+        if not plotly_available:
+            pytest.skip("plotly not installed")
+
+        result = PlotlyFormatter.format_query_result(upstream_query_result)
+        figure = json.loads(result)
+
+        node_traces = [
+            t for t in figure["data"] if t.get("mode") == "markers+text"
+        ]
+        node_trace = node_traces[0]
+        colors = node_trace["marker"]["color"]
+        # source.col is a root and should be teal
+        assert ROOT_FILL in colors
+
+    def test_leaf_node_has_violet_color(self, downstream_query_result, plotly_available):
+        if not plotly_available:
+            pytest.skip("plotly not installed")
+
+        result = PlotlyFormatter.format_query_result(downstream_query_result)
+        figure = json.loads(result)
+
+        node_traces = [
+            t for t in figure["data"] if t.get("mode") == "markers+text"
+        ]
+        node_trace = node_traces[0]
+        colors = node_trace["marker"]["color"]
+        # target.col is a leaf and should be violet
+        assert LEAF_FILL in colors
+
+    def test_has_legend_traces(self, upstream_query_result, plotly_available):
+        if not plotly_available:
+            pytest.skip("plotly not installed")
+
+        result = PlotlyFormatter.format_query_result(upstream_query_result)
+        figure = json.loads(result)
+
+        legend_traces = [
+            t for t in figure["data"] if t.get("showlegend") is True
+        ]
+        assert len(legend_traces) == 3  # Queried, Root, Leaf
+
+        legend_names = [t["name"] for t in legend_traces]
+        assert "Queried Column" in legend_names
+        assert "Root (no upstream)" in legend_names
+        assert "Leaf (no downstream)" in legend_names
+
+    def test_title_includes_direction_and_column(
+        self, upstream_query_result, plotly_available
+    ):
+        if not plotly_available:
+            pytest.skip("plotly not installed")
+
+        result = PlotlyFormatter.format_query_result(upstream_query_result)
+        figure = json.loads(result)
+
+        title = figure["layout"]["title"]["text"]
+        assert "Upstream" in title
+        assert "target.col" in title
+
+    def test_downstream_title(self, downstream_query_result, plotly_available):
+        if not plotly_available:
+            pytest.skip("plotly not installed")
+
+        result = PlotlyFormatter.format_query_result(downstream_query_result)
+        figure = json.loads(result)
+
+        title = figure["layout"]["title"]["text"]
+        assert "Downstream" in title
+        assert "source.col" in title
+
+
+class TestPlotlyFormatterDependency:
+    """Tests for PlotlyFormatter dependency handling."""
+
+    def test_raises_import_error_without_plotly(
+        self, empty_graph, monkeypatch, plotly_available
+    ):
+        """Test that ImportError is raised when plotly is not available."""
+        if plotly_available:
+            # Simulate plotly not being installed
+            import builtins
+
+            original_import = builtins.__import__
+
+            def mock_import(name, *args, **kwargs):
+                if name == "plotly":
+                    raise ImportError("No module named 'plotly'")
+                return original_import(name, *args, **kwargs)
+
+            monkeypatch.setattr(builtins, "__import__", mock_import)
+
+            with pytest.raises(ImportError) as exc_info:
+                PlotlyFormatter.format_full_graph(empty_graph)
+
+            assert "plotly" in str(exc_info.value).lower()
+        else:
+            # Plotly not installed, should raise ImportError naturally
+            with pytest.raises(ImportError) as exc_info:
+                PlotlyFormatter.format_full_graph(empty_graph)
+
+            assert "plotly" in str(exc_info.value).lower()
