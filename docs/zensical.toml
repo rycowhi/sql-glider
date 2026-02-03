@@ -7,7 +7,6 @@
 # ============================================================================
 
 [project]
-
 repo_url = "https://github.com/rycowhi/sql-glider/"
 
 # The site_name is shown in the page header and the browser window title
