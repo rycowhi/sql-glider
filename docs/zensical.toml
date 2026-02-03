@@ -8,6 +8,8 @@
 
 [project]
 
+repo_url = "https://github.com/rycowhi/sql-glider/"
+
 # The site_name is shown in the page header and the browser window title
 #
 # Read more: https://zensical.org/docs/setup/basics/#site_name
@@ -299,8 +301,8 @@ toggle.name = "Switch to dark mode"
 # ----------------------------------------------------------------------------
 # The "extra" section contains miscellaneous settings.
 # ----------------------------------------------------------------------------
-#[[project.extra.social]]
+[[project.extra.social]]
 icon = "fontawesome/brands/github"
-link = "https://github.com/rycowhi/sql-glider/tree/main/src/sqlglider"
+link = "https://github.com/rycowhi/sql-glider/"
 
 
