@@ -8,6 +8,7 @@
 
 [project]
 repo_url = "https://github.com/rycowhi/sql-glider/"
+repo_name = "rycowhi/sql-glider"
 
 # The site_name is shown in the page header and the browser window title
 #
@@ -295,7 +296,7 @@ toggle.name = "Switch to dark mode"
 # ----------------------------------------------------------------------------
 #[project.theme.icon]
 #logo = "lucide/smile"
-#repo = "lucide/smile"
+repo = "fontawesome/brands/github"
 
 # ----------------------------------------------------------------------------
 # The "extra" section contains miscellaneous settings.
