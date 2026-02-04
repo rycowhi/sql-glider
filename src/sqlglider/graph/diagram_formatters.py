@@ -364,7 +364,11 @@ def _compute_layered_layout(
     x_spacing: float = 250.0,
     y_spacing: float = 100.0,
 ) -> dict[str, tuple[float, float]]:
-    """Compute layered layout positions for nodes using topological ordering.
+    """Compute layered layout positions for nodes using Graphviz's dot algorithm.
+
+    Uses Graphviz's dot layout engine (Sugiyama algorithm) which minimizes edge
+    crossings by using the barycenter heuristic to optimize node ordering within
+    each layer.
 
     Positions nodes in layers from left to right based on their dependencies.
     Nodes with no incoming edges are placed in layer 0, their dependents in
@@ -382,6 +386,89 @@ def _compute_layered_layout(
     if not nodes:
         return {}
 
+    try:
+        import pygraphviz  # noqa: F401  # type: ignore[import-not-found]
+
+        return _compute_graphviz_layout(nodes, edges, x_spacing, y_spacing)
+    except ImportError:
+        # Fallback to simple layered layout if pygraphviz not available
+        return _compute_simple_layered_layout(nodes, edges, x_spacing, y_spacing)
+
+
+def _compute_graphviz_layout(
+    nodes: list[str],
+    edges: list[tuple[str, str]],
+    x_spacing: float = 250.0,
+    y_spacing: float = 100.0,
+) -> dict[str, tuple[float, float]]:
+    """Compute layout using Graphviz's dot algorithm with crossing minimization.
+
+    Args:
+        nodes: List of node identifiers
+        edges: List of (source, target) edge tuples
+        x_spacing: Horizontal spacing between layers
+        y_spacing: Vertical spacing between nodes in the same layer
+
+    Returns:
+        Dictionary mapping node identifiers to (x, y) positions
+    """
+    import pygraphviz as pgv  # type: ignore[import-not-found]
+
+    # Create directed graph
+    g = pgv.AGraph(directed=True, rankdir="LR")
+
+    # Set graph attributes for spacing
+    g.graph_attr["ranksep"] = str(x_spacing / 72.0)  # Convert pixels to inches
+    g.graph_attr["nodesep"] = str(y_spacing / 72.0)
+
+    # Add nodes
+    for node in nodes:
+        g.add_node(node)
+
+    # Add edges (only for nodes that exist in our node list)
+    node_set = set(nodes)
+    for src, tgt in edges:
+        if src in node_set and tgt in node_set:
+            g.add_edge(src, tgt)
+
+    # Compute layout using dot algorithm
+    g.layout(prog="dot")
+
+    # Extract positions
+    positions: dict[str, tuple[float, float]] = {}
+    for node in nodes:
+        n = g.get_node(node)
+        # Position is returned as "x,y" string in points (1/72 inch)
+        pos_str = n.attr.get("pos", "0,0")
+        if pos_str:
+            x_str, y_str = pos_str.split(",")
+            # Convert from points to our coordinate system
+            x = float(x_str)
+            y = float(y_str)
+            positions[node] = (x, y)
+
+    return positions
+
+
+def _compute_simple_layered_layout(
+    nodes: list[str],
+    edges: list[tuple[str, str]],
+    x_spacing: float = 250.0,
+    y_spacing: float = 100.0,
+) -> dict[str, tuple[float, float]]:
+    """Fallback simple layered layout using topological ordering.
+
+    Used when pygraphviz is not available. Does not minimize edge crossings.
+
+    Args:
+        nodes: List of node identifiers
+        edges: List of (source, target) edge tuples
+        x_spacing: Horizontal spacing between layers
+        y_spacing: Vertical spacing between nodes in the same layer
+
+    Returns:
+        Dictionary mapping node identifiers to (x, y) positions
+    """
     # Build adjacency structures
     incoming: dict[str, set[str]] = defaultdict(set)
     outgoing: dict[str, set[str]] = defaultdict(set)

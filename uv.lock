@@ -815,6 +815,12 @@ wheels = [
 ]
 
 [[package]]
+name = "pygraphviz"
+version = "1.14"
+source = { registry = "https://pypi.org/simple/" }
+sdist = { url = "https://files.pythonhosted.org/packages/66/ca/823d5c74a73d6b8b08e1f5aea12468ef334f0732c65cbb18df2a7f285c87/pygraphviz-1.14.tar.gz", hash = "sha256:c10df02377f4e39b00ae17c862f4ee7e5767317f1c6b2dfd04cea6acc7fc2bea", size = 106003, upload-time = "2024-09-29T18:31:12.471Z" }
+
+[[package]]
 name = "pymdown-extensions"
 version = "10.20.1"
 source = { registry = "https://pypi.org/simple/" }
@@ -1161,6 +1167,7 @@ databricks = [
 ]
 plotly = [
     { name = "plotly" },
+    { name = "pygraphviz" },
 ]
 
 [package.dev-dependencies]
@@ -1185,6 +1192,7 @@ requires-dist = [
     { name = "jinja2", specifier = ">=3.0.0" },
     { name = "plotly", marker = "extra == 'plotly'", specifier = ">=5.0.0" },
     { name = "pydantic", specifier = ">=2.0.0" },
+    { name = "pygraphviz", marker = "extra == 'plotly'", specifier = ">=1.11" },
     { name = "rich", specifier = ">=13.0.0" },
     { name = "rustworkx", specifier = ">=0.15.0" },
     { name = "sqlglot", extras = ["rs"], specifier = ">=25.0.0" },
