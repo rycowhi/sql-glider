@@ -329,6 +329,20 @@ The `plotly` format outputs a JSON figure specification that can be loaded into 
     pip install sql-glider[plotly]
     ```
 
+!!! tip "Better Layout with Graphviz"
+
+    For complex graphs with many nodes and edges, installing [Graphviz](https://graphviz.org/download/) on your system enables an optimized layout algorithm that minimizes edge crossings. Without Graphviz, a simpler layout is used that may result in overlapping edges.
+
+    ```bash
+    # Install Graphviz first (system package)
+    # Windows: choco install graphviz
+    # macOS: brew install graphviz
+    # Linux: apt install graphviz graphviz-dev
+
+    # Then install sql-glider with plotly extra
+    pip install sql-glider[plotly]
+    ```
+
 **Example usage with Dash:**
 
 ```python
