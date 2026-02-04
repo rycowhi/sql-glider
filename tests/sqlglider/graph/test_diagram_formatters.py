@@ -235,15 +235,17 @@ class TestMermaidFormatterFullGraph:
 
     def test_linear_graph_has_edges(self, linear_graph):
         result = MermaidFormatter.format_full_graph(linear_graph)
-        assert "a_col --> b_col" in result
-        assert "b_col --> c_col" in result
+        # Edges now include file path labels
+        assert "a_col -->|q.sql| b_col" in result
+        assert "b_col -->|q.sql| c_col" in result
 
     def test_diamond_graph_edges(self, diamond_graph):
         result = MermaidFormatter.format_full_graph(diamond_graph)
-        assert "a_col --> b_col" in result
-        assert "a_col --> c_col" in result
-        assert "b_col --> d_col" in result
-        assert "c_col --> d_col" in result
+        # Edges now include file path labels
+        assert "a_col -->|q.sql| b_col" in result
+        assert "a_col -->|q.sql| c_col" in result
+        assert "b_col -->|q.sql| d_col" in result
+        assert "c_col -->|q.sql| d_col" in result
 
     def test_starts_with_flowchart(self, linear_graph):
         result = MermaidFormatter.format_full_graph(linear_graph)
@@ -284,6 +286,45 @@ class TestMermaidFormatterQueryResult:
     def test_legend_absent_for_empty_result(self, empty_query_result):
         result = MermaidFormatter.format_query_result(empty_query_result)
         assert "Legend" not in result
+
+    def test_with_graph_has_edge_labels(self, upstream_query_result):
+        """Test that passing a graph adds edge file path labels."""
+        # Create a graph that matches the query result edges
+        matching_graph = LineageGraph(
+            nodes=[
+                GraphNode.from_identifier("source.col", "/path/lineage.sql", 0),
+                GraphNode.from_identifier("mid.col", "/path/lineage.sql", 0),
+                GraphNode.from_identifier("target.col", "/path/lineage.sql", 0),
+            ],
+            edges=[
+                GraphEdge(
+                    source_node="source.col",
+                    target_node="mid.col",
+                    file_path="/path/lineage.sql",
+                    query_index=0,
+                ),
+                GraphEdge(
+                    source_node="mid.col",
+                    target_node="target.col",
+                    file_path="/path/lineage.sql",
+                    query_index=0,
+                ),
+            ],
+        )
+
+        result = MermaidFormatter.format_query_result(
+            upstream_query_result, graph=matching_graph
+        )
+        # Edges should have file path labels
+        assert "-->|lineage.sql|" in result
+
+    def test_without_graph_no_edge_labels(self, upstream_query_result):
+        """Test that without graph parameter, edges have no labels."""
+        result = MermaidFormatter.format_query_result(upstream_query_result)
+        # Edges should not have labels (no |...|)
+        assert "source_col --> mid_col" in result
+        assert "mid_col --> target_col" in result
+        assert "-->|" not in result
 
 
 # --- DotFormatter tests ---
@@ -382,7 +423,8 @@ class TestMermaidMarkdownFormatterFullGraph:
     def test_contains_mermaid_content(self, linear_graph):
         result = MermaidMarkdownFormatter.format_full_graph(linear_graph)
         assert "flowchart TD" in result
-        assert "a_col --> b_col" in result
+        # Edges now include file path labels
+        assert "a_col -->|q.sql| b_col" in result
 
     def test_empty_graph(self, empty_graph):
         result = MermaidMarkdownFormatter.format_full_graph(empty_graph)

@@ -102,16 +102,26 @@ class MermaidFormatter:
             node_id = _sanitize_mermaid_id(node.identifier)
             lines.append(f'    {node_id}["{node.identifier}"]')
 
-        # Add edges
+        # Add edges with file path labels
         for edge in graph.edges:
             src = _sanitize_mermaid_id(edge.source_node)
             tgt = _sanitize_mermaid_id(edge.target_node)
-            lines.append(f"    {src} --> {tgt}")
+            # Extract filename from path
+            file_name = (
+                edge.file_path.split("/")[-1].split("\\")[-1] if edge.file_path else ""
+            )
+            if file_name:
+                lines.append(f"    {src} -->|{file_name}| {tgt}")
+            else:
+                lines.append(f"    {src} --> {tgt}")
 
         return "\n".join(lines)
 
     @staticmethod
-    def format_query_result(result: LineageQueryResult) -> str:
+    def format_query_result(
+        result: LineageQueryResult,
+        graph: Optional[LineageGraph] = None,
+    ) -> str:
         """Format query result as a Mermaid flowchart with styling.
 
         The queried column is highlighted in amber, root nodes in teal,
@@ -119,6 +129,7 @@ class MermaidFormatter:
 
         Args:
             result: LineageQueryResult from upstream/downstream query
+            graph: Optional LineageGraph for edge file path labels
 
         Returns:
             Mermaid diagram string with style directives and legend
@@ -134,16 +145,27 @@ class MermaidFormatter:
         all_nodes = _collect_query_nodes(result)
         edges = _collect_query_edges(result)
 
+        # Build edge file path lookup if graph is provided
+        edge_file_paths: dict[tuple[str, str], str] = {}
+        if graph:
+            for e in graph.edges:
+                edge_file_paths[(e.source_node, e.target_node)] = e.file_path
+
         # Declare nodes
         for identifier in sorted(all_nodes):
             node_id = _sanitize_mermaid_id(identifier)
             lines.append(f'    {node_id}["{identifier}"]')
 
-        # Add edges
+        # Add edges with optional file path labels
         for src, tgt in sorted(edges):
-            lines.append(
-                f"    {_sanitize_mermaid_id(src)} --> {_sanitize_mermaid_id(tgt)}"
-            )
+            src_id = _sanitize_mermaid_id(src)
+            tgt_id = _sanitize_mermaid_id(tgt)
+            file_path = edge_file_paths.get((src, tgt), "")
+            file_name = file_path.split("/")[-1].split("\\")[-1] if file_path else ""
+            if file_name:
+                lines.append(f"    {src_id} -->|{file_name}| {tgt_id}")
+            else:
+                lines.append(f"    {src_id} --> {tgt_id}")
 
         # Style directives
         queried_id = _sanitize_mermaid_id(result.query_column)
@@ -200,16 +222,20 @@ class MermaidMarkdownFormatter:
         return f"```mermaid\n{mermaid}\n```"
 
     @staticmethod
-    def format_query_result(result: LineageQueryResult) -> str:
+    def format_query_result(
+        result: LineageQueryResult,
+        graph: Optional[LineageGraph] = None,
+    ) -> str:
         """Format query result as a Mermaid diagram in a markdown code block.
 
         Args:
             result: LineageQueryResult from upstream/downstream query
+            graph: Optional LineageGraph for edge file path labels
 
         Returns:
             Markdown string with fenced Mermaid diagram
         """
-        mermaid = MermaidFormatter.format_query_result(result)
+        mermaid = MermaidFormatter.format_query_result(result, graph=graph)
         return f"```mermaid\n{mermaid}\n```"
 
 

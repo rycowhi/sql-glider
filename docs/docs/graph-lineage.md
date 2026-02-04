@@ -258,13 +258,15 @@ sqlglider graph query graph.json --downstream orders.order_total -f dot
 sqlglider graph query graph.json --upstream total_spent -f plotly
 ```
 
-Query diagrams include color-coded nodes and a legend:
+Query diagrams include color-coded nodes, edge labels showing the source SQL file, and a legend:
 
 | Color  | Meaning |
 |--------|---------|
 | Amber  | The queried column |
 | Teal   | Root node (no upstream dependencies) |
 | Violet | Leaf node (no downstream consumers) |
+
+Each edge in the diagram is labeled with the SQL filename that defines that relationship, making it easy to trace data flow back to the source code.
 
 **Example:** Imagine a pipeline where a `revenue` report column draws from multiple sources through several transformation layers. Querying `--upstream revenue` would produce a diagram like this:
 
@@ -277,12 +279,12 @@ flowchart TD
     staging_orders_tax_amount["staging_orders.tax_amount"]
     mart_orders_total_usd["mart_orders.total_usd"]
     revenue["revenue"]
-    raw_orders_amount --> staging_orders_subtotal
-    raw_orders_tax --> staging_orders_tax_amount
-    staging_orders_subtotal --> mart_orders_total_usd
-    staging_orders_tax_amount --> mart_orders_total_usd
-    raw_exchange_rates_rate --> mart_orders_total_usd
-    mart_orders_total_usd --> revenue
+    raw_orders_amount -->|staging_orders.sql| staging_orders_subtotal
+    raw_orders_tax -->|staging_orders.sql| staging_orders_tax_amount
+    staging_orders_subtotal -->|mart_orders.sql| mart_orders_total_usd
+    staging_orders_tax_amount -->|mart_orders.sql| mart_orders_total_usd
+    raw_exchange_rates_rate -->|mart_orders.sql| mart_orders_total_usd
+    mart_orders_total_usd -->|reports.sql| revenue
 
     style revenue fill:#e6a843,stroke:#b8860b,stroke-width:3px
     style raw_orders_amount fill:#4ecdc4,stroke:#2b9e96
@@ -299,7 +301,7 @@ flowchart TD
     style legend_leaf fill:#c084fc,stroke:#7c3aed
 ```
 
-The amber node is the column you queried (`revenue`), teal nodes are ultimate root sources with no further upstream dependencies (`raw_orders.amount`, `raw_orders.tax`, `raw_exchange_rates.rate`), and intermediate nodes (`staging_orders.*`, `mart_orders.*`) appear in the default style. The legend is included automatically.
+The amber node is the column you queried (`revenue`), teal nodes are ultimate root sources with no further upstream dependencies (`raw_orders.amount`, `raw_orders.tax`, `raw_exchange_rates.rate`), and intermediate nodes (`staging_orders.*`, `mart_orders.*`) appear in the default style. Each edge is labeled with the SQL file that defines that relationship. The legend is included automatically.
 
 ### Mermaid Markdown Format
 

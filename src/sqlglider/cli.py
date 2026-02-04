@@ -1715,11 +1715,15 @@ def graph_query(
         elif output_format == "mermaid":
             from sqlglider.graph.diagram_formatters import MermaidFormatter
 
-            print(MermaidFormatter.format_query_result(result))
+            print(MermaidFormatter.format_query_result(result, graph=querier.graph))
         elif output_format == "mermaid-markdown":
             from sqlglider.graph.diagram_formatters import MermaidMarkdownFormatter
 
-            print(MermaidMarkdownFormatter.format_query_result(result))
+            print(
+                MermaidMarkdownFormatter.format_query_result(
+                    result, graph=querier.graph
+                )
+            )
         elif output_format == "dot":
             from sqlglider.graph.diagram_formatters import DotFormatter
 
