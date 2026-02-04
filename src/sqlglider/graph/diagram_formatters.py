@@ -3,7 +3,7 @@
 import json
 import re
 from collections import defaultdict
-from typing import Any, Set
+from typing import Any, Optional, Set
 
 from sqlglider.graph.models import LineageGraph
 from sqlglider.graph.query import LineageQueryResult
@@ -335,6 +335,8 @@ class DotFormatter:
 def _compute_layered_layout(
     nodes: list[str],
     edges: list[tuple[str, str]],
+    x_spacing: float = 250.0,
+    y_spacing: float = 100.0,
 ) -> dict[str, tuple[float, float]]:
     """Compute layered layout positions for nodes using topological ordering.
 
@@ -345,6 +347,8 @@ def _compute_layered_layout(
     Args:
         nodes: List of node identifiers
         edges: List of (source, target) edge tuples
+        x_spacing: Horizontal spacing between layers (default: 250 pixels)
+        y_spacing: Vertical spacing between nodes in the same layer (default: 100 pixels)
 
     Returns:
         Dictionary mapping node identifiers to (x, y) positions
@@ -395,15 +399,13 @@ def _compute_layered_layout(
 
     # Compute positions: x based on layer, y spread vertically within layer
     positions: dict[str, tuple[float, float]] = {}
-    max_layer = max(layers.values()) if layers else 0
-    x_spacing = 1.0 if max_layer == 0 else 1.0
 
     for layer, layer_nodes in layer_groups.items():
         x = layer * x_spacing
         n = len(layer_nodes)
         for i, node in enumerate(sorted(layer_nodes)):
-            # Center nodes vertically, spread them out
-            y = (i - (n - 1) / 2) * 0.5
+            # Center nodes vertically, spread them out uniformly
+            y = (i - (n - 1) / 2) * y_spacing
             positions[node] = (x, y)
 
     return positions
@@ -444,6 +446,11 @@ class PlotlyFormatter:
         node_ids = [n.identifier for n in graph.nodes]
         edge_tuples = [(e.source_node, e.target_node) for e in graph.edges]
 
+        # Build lookup for edge file paths
+        edge_file_paths: dict[tuple[str, str], str] = {}
+        for e in graph.edges:
+            edge_file_paths[(e.source_node, e.target_node)] = e.file_path
+
         if not node_ids:
             # Empty graph
             figure: dict[str, Any] = {
@@ -459,21 +466,43 @@ class PlotlyFormatter:
 
         positions = _compute_layered_layout(node_ids, edge_tuples)
 
-        # Build edge traces (one trace per edge for simplicity)
+        # Build edge traces with hover text for file path
         edge_traces: list[dict[str, Any]] = []
+        edge_annotations: list[dict[str, Any]] = []
         for src, tgt in edge_tuples:
             if src in positions and tgt in positions:
                 x0, y0 = positions[src]
                 x1, y1 = positions[tgt]
+                file_path = edge_file_paths.get((src, tgt), "")
+                # Extract just the filename for display
+                file_name = (
+                    file_path.split("/")[-1].split("\\")[-1] if file_path else ""
+                )
+
                 edge_traces.append(
                     {
                         "type": "scatter",
                         "x": [x0, x1, None],
                         "y": [y0, y1, None],
                         "mode": "lines",
-                        "line": {"width": 1, "color": "#888"},
-                        "hoverinfo": "none",
+                        "line": {"width": 1.5, "color": "#888"},
+                        "hoverinfo": "text",
+                        "hovertext": file_path,
                         "showlegend": False,
+                    }
+                )
+
+                # Add annotation at midpoint of edge
+                mid_x = (x0 + x1) / 2
+                mid_y = (y0 + y1) / 2
+                edge_annotations.append(
+                    {
+                        "x": mid_x,
+                        "y": mid_y,
+                        "text": file_name,
+                        "showarrow": False,
+                        "font": {"size": 9, "color": "#666"},
+                        "bgcolor": "rgba(255,255,255,0.8)",
                     }
                 )
 
@@ -489,14 +518,20 @@ class PlotlyFormatter:
             "mode": "markers+text",
             "text": node_text,
             "textposition": "top center",
+            "textfont": {"size": 11},
             "hoverinfo": "text",
             "marker": {
-                "size": 20,
+                "size": 15,
                 "color": "#6495ED",
                 "line": {"width": 2, "color": "#4169E1"},
             },
             "showlegend": False,
         }
+
+        # Calculate figure dimensions based on graph size
+        min_height = 400
+        height_per_node = 50
+        calculated_height = max(min_height, len(node_ids) * height_per_node)
 
         figure = {
             "data": edge_traces + [node_trace],
@@ -506,14 +541,19 @@ class PlotlyFormatter:
                 "hovermode": "closest",
                 "xaxis": {"visible": False},
                 "yaxis": {"visible": False},
-                "margin": {"l": 40, "r": 40, "t": 60, "b": 40},
+                "height": calculated_height,
+                "margin": {"l": 50, "r": 50, "t": 60, "b": 40},
+                "annotations": edge_annotations,
             },
         }
 
         return json.dumps(figure, indent=2)
 
     @staticmethod
-    def format_query_result(result: LineageQueryResult) -> str:
+    def format_query_result(
+        result: LineageQueryResult,
+        graph: Optional[LineageGraph] = None,
+    ) -> str:
         """Format query result as a Plotly JSON figure with styling.
 
         The queried column is highlighted in amber, root nodes in teal,
@@ -521,6 +561,7 @@ class PlotlyFormatter:
 
         Args:
             result: LineageQueryResult from upstream/downstream query
+            graph: Optional LineageGraph for edge file path labels
 
         Returns:
             JSON string representing a Plotly figure specification
@@ -529,6 +570,12 @@ class PlotlyFormatter:
 
         all_nodes = _collect_query_nodes(result)
         edges = _collect_query_edges(result)
+
+        # Build edge file path lookup if graph is provided
+        edge_file_paths: dict[tuple[str, str], str] = {}
+        if graph:
+            for e in graph.edges:
+                edge_file_paths[(e.source_node, e.target_node)] = e.file_path
 
         if not all_nodes:
             # Should not happen, but handle gracefully
@@ -568,12 +615,18 @@ class PlotlyFormatter:
             else:
                 node_colors.append("#6495ED")  # Default blue
 
-        # Build edge traces
+        # Build edge traces with optional file path labels
         edge_traces: list[dict[str, Any]] = []
+        edge_annotations: list[dict[str, Any]] = []
         for src, tgt in sorted(edges):
             if src in positions and tgt in positions:
                 x0, y0 = positions[src]
                 x1, y1 = positions[tgt]
+                file_path = edge_file_paths.get((src, tgt), "")
+                file_name = (
+                    file_path.split("/")[-1].split("\\")[-1] if file_path else ""
+                )
+
                 edge_traces.append(
                     {
                         "type": "scatter",
@@ -581,10 +634,26 @@ class PlotlyFormatter:
                         "y": [y0, y1, None],
                         "mode": "lines",
                         "line": {"width": 1.5, "color": "#888"},
-                        "hoverinfo": "none",
+                        "hoverinfo": "text" if file_path else "none",
+                        "hovertext": file_path if file_path else None,
                         "showlegend": False,
                     }
                 )
+
+                # Add annotation at midpoint of edge if we have file path info
+                if file_name:
+                    mid_x = (x0 + x1) / 2
+                    mid_y = (y0 + y1) / 2
+                    edge_annotations.append(
+                        {
+                            "x": mid_x,
+                            "y": mid_y,
+                            "text": file_name,
+                            "showarrow": False,
+                            "font": {"size": 9, "color": "#666"},
+                            "bgcolor": "rgba(255,255,255,0.8)",
+                        }
+                    )
 
         # Build node trace
         node_x = [positions[n][0] for n in node_list if n in positions]
@@ -597,9 +666,10 @@ class PlotlyFormatter:
             "mode": "markers+text",
             "text": node_list,
             "textposition": "top center",
+            "textfont": {"size": 11},
             "hoverinfo": "text",
             "marker": {
-                "size": 20,
+                "size": 15,
                 "color": node_colors,
                 "line": {"width": 2, "color": "#333"},
             },
@@ -640,17 +710,29 @@ class PlotlyFormatter:
         direction_label = "Upstream" if result.direction == "upstream" else "Downstream"
         title = f"{direction_label} Lineage: {result.query_column}"
 
+        # Calculate figure dimensions based on graph size
+        min_height = 400
+        height_per_node = 50
+        calculated_height = max(min_height, len(node_list) * height_per_node)
+
+        layout: dict[str, Any] = {
+            "title": {"text": title},
+            "showlegend": True,
+            "legend": {"x": 1, "y": 1, "xanchor": "right"},
+            "hovermode": "closest",
+            "xaxis": {"visible": False},
+            "yaxis": {"visible": False},
+            "height": calculated_height,
+            "margin": {"l": 50, "r": 50, "t": 60, "b": 40},
+        }
+
+        # Add edge annotations if we have file path info
+        if edge_annotations:
+            layout["annotations"] = edge_annotations
+
         figure = {
             "data": edge_traces + [node_trace] + legend_traces,
-            "layout": {
-                "title": {"text": title},
-                "showlegend": True,
-                "legend": {"x": 1, "y": 1, "xanchor": "right"},
-                "hovermode": "closest",
-                "xaxis": {"visible": False},
-                "yaxis": {"visible": False},
-                "margin": {"l": 40, "r": 40, "t": 60, "b": 40},
-            },
+            "layout": layout,
         }
 
         return json.dumps(figure, indent=2)

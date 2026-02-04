@@ -356,6 +356,10 @@ The Plotly output uses the same color scheme as Mermaid and DOT diagrams:
 | Teal   | Root node (no upstream dependencies) |
 | Violet | Leaf node (no downstream consumers) |
 
+See an example of a plot loaded into Dash below:
+
+![Plotly-Dash Example](./static/plotly-dash-example.png)
+
 ### Rendering Diagrams
 
 **Mermaid:**

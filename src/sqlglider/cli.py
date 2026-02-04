@@ -1727,7 +1727,7 @@ def graph_query(
         elif output_format == "plotly":
             from sqlglider.graph.diagram_formatters import PlotlyFormatter
 
-            print(PlotlyFormatter.format_query_result(result))
+            print(PlotlyFormatter.format_query_result(result, graph=querier.graph))
 
     except ImportError as e:
         err_console.print(f"[red]Error:[/red] {e}")

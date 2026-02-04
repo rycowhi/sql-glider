@@ -553,6 +553,36 @@ class TestPlotlyFormatterFullGraph:
         assert figure["layout"]["xaxis"]["visible"] is False
         assert figure["layout"]["yaxis"]["visible"] is False
 
+    def test_has_edge_annotations_with_file_paths(self, linear_graph, plotly_available):
+        if not plotly_available:
+            pytest.skip("plotly not installed")
+
+        result = PlotlyFormatter.format_full_graph(linear_graph)
+        figure = json.loads(result)
+
+        # Should have annotations for edges
+        assert "annotations" in figure["layout"]
+        annotations = figure["layout"]["annotations"]
+        # linear_graph has 2 edges, so 2 annotations
+        assert len(annotations) == 2
+
+        # Each annotation should have the filename
+        for ann in annotations:
+            assert "text" in ann
+            assert ann["text"] == "q.sql"  # From linear_graph fixture (/path/q.sql)
+
+    def test_edge_hover_text_has_full_path(self, linear_graph, plotly_available):
+        if not plotly_available:
+            pytest.skip("plotly not installed")
+
+        result = PlotlyFormatter.format_full_graph(linear_graph)
+        figure = json.loads(result)
+
+        edge_traces = [t for t in figure["data"] if t.get("mode") == "lines"]
+        for trace in edge_traces:
+            assert trace["hoverinfo"] == "text"
+            assert "hovertext" in trace
+
 
 class TestPlotlyFormatterQueryResult:
     """Tests for PlotlyFormatter.format_query_result."""
@@ -660,6 +690,66 @@ class TestPlotlyFormatterQueryResult:
         title = figure["layout"]["title"]["text"]
         assert "Downstream" in title
         assert "source.col" in title
+
+    def test_with_graph_has_edge_annotations(
+        self, upstream_query_result, plotly_available
+    ):
+        """Test that passing a graph adds edge file path annotations."""
+        if not plotly_available:
+            pytest.skip("plotly not installed")
+
+        # Create a graph that matches the query result edges
+        matching_graph = LineageGraph(
+            nodes=[
+                GraphNode.from_identifier("source.col", "/path/lineage.sql", 0),
+                GraphNode.from_identifier("mid.col", "/path/lineage.sql", 0),
+                GraphNode.from_identifier("target.col", "/path/lineage.sql", 0),
+            ],
+            edges=[
+                GraphEdge(
+                    source_node="source.col",
+                    target_node="mid.col",
+                    file_path="/path/lineage.sql",
+                    query_index=0,
+                ),
+                GraphEdge(
+                    source_node="mid.col",
+                    target_node="target.col",
+                    file_path="/path/lineage.sql",
+                    query_index=0,
+                ),
+            ],
+        )
+
+        result = PlotlyFormatter.format_query_result(
+            upstream_query_result, graph=matching_graph
+        )
+        figure = json.loads(result)
+
+        # Should have annotations when graph is provided
+        assert "annotations" in figure["layout"]
+        annotations = figure["layout"]["annotations"]
+        assert len(annotations) == 2  # Two edges in the result
+
+        # Annotations should have file names
+        for ann in annotations:
+            assert "text" in ann
+            assert ann["text"] == "lineage.sql"
+            # Should be just the filename, not full path
+            assert "/" not in ann["text"] and "\\" not in ann["text"]
+
+    def test_without_graph_no_annotations(
+        self, upstream_query_result, plotly_available
+    ):
+        """Test that without graph parameter, no annotations are added."""
+        if not plotly_available:
+            pytest.skip("plotly not installed")
+
+        result = PlotlyFormatter.format_query_result(upstream_query_result)
+        figure = json.loads(result)
+
+        # Should not have annotations when graph is not provided
+        assert "annotations" not in figure["layout"]
 
 
 class TestPlotlyFormatterDependency:
