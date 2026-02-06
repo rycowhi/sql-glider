@@ -258,11 +258,17 @@ uv run sqlglider graph merge graph1.json graph2.json -o merged.json
 # Merge with glob pattern
 uv run sqlglider graph merge --glob "graphs/*.json" -o merged.json
 
-# Query upstream dependencies
+# Query upstream dependencies (column-level)
 uv run sqlglider graph query graph.json --upstream orders.customer_id
 
-# Query downstream dependencies
+# Query downstream dependencies (column-level)
 uv run sqlglider graph query graph.json --downstream customers.id
+
+# Query upstream dependencies for ALL columns in a table (table-level)
+uv run sqlglider graph query graph.json --upstream prod.orders --level table
+
+# Query downstream dependencies for ALL columns in a table (table-level)
+uv run sqlglider graph query graph.json --downstream customers --level table
 
 # Query with JSON output
 uv run sqlglider graph query graph.json --upstream orders.total -f json
@@ -278,6 +284,9 @@ uv run sqlglider graph query graph.json --downstream customers.id -f dot
 
 # Query with Plotly JSON output (for Dash/Plotly apps)
 uv run sqlglider graph query graph.json --upstream orders.total -f plotly
+
+# Table-level query with diagram output
+uv run sqlglider graph query graph.json --upstream orders --level table -f mermaid
 
 # Visualize entire graph as Mermaid diagram
 uv run sqlglider graph visualize graph.json

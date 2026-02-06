@@ -1,7 +1,7 @@
 """Graph query functionality for upstream/downstream analysis."""
 
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import rustworkx as rx
 
@@ -17,18 +17,25 @@ class LineageQueryResult:
         query_column: str,
         direction: str,  # "upstream" or "downstream"
         related_columns: List[LineageNode],
+        queried_columns: Optional[List[str]] = None,
+        is_table_query: bool = False,
     ):
         """
         Initialize query result.
 
         Args:
-            query_column: The column that was queried
+            query_column: The column or table that was queried
             direction: Query direction ("upstream" or "downstream")
             related_columns: List of related LineageNode objects with hop info
+            queried_columns: List of column identifiers that were queried
+                (for table-level queries, contains all columns in the table)
+            is_table_query: True if this is a table-level query
         """
         self.query_column = query_column
         self.direction = direction
         self.related_columns = related_columns
+        self.queried_columns = queried_columns or [query_column]
+        self.is_table_query = is_table_query
 
     def __len__(self) -> int:
         """Return number of related columns."""
@@ -276,6 +283,184 @@ class GraphQuerier:
             if identifier.lower() == column_lower:
                 return identifier
         return None
+
+    def _find_table_columns(self, table: str) -> List[str]:
+        """
+        Find all column identifiers belonging to a table.
+
+        Supports two matching modes:
+        - Single part (e.g., "orders"): Matches any column where GraphNode.table == "orders"
+          (cross-schema matching - matches prod.orders.col AND staging.orders.col)
+        - Two parts (e.g., "prod.orders"): Matches columns where identifier starts with
+          "prod.orders." (schema-qualified matching)
+
+        Args:
+            table: Table identifier (e.g., "orders" or "prod.orders")
+
+        Returns:
+            List of matched column identifiers (original case preserved)
+
+        Raises:
+            ValueError: If no columns found for the table
+        """
+        table_lower = table.lower()
+        parts = table_lower.split(".")
+        matched_columns = []
+
+        if len(parts) == 1:
+            # Single part: match on GraphNode.table field (cross-schema)
+            for node in self.graph.nodes:
+                if node.table and node.table.lower() == table_lower:
+                    matched_columns.append(node.identifier)
+        else:
+            # Two+ parts: prefix match on identifier (schema.table.)
+            prefix = table_lower + "."
+            for node in self.graph.nodes:
+                if node.identifier.lower().startswith(prefix):
+                    matched_columns.append(node.identifier)
+
+        if not matched_columns:
+            raise ValueError(f"No columns found for table '{table}'")
+
+        return sorted(matched_columns, key=str.lower)
+
+    def _aggregate_table_results(
+        self,
+        results: List[LineageQueryResult],
+        queried_columns: List[str],
+        table: str,
+        direction: str,
+    ) -> LineageQueryResult:
+        """
+        Aggregate multiple column-level results into a single table-level result.
+
+        Args:
+            results: List of per-column LineageQueryResult objects
+            queried_columns: List of column identifiers that were queried
+            table: The table that was queried
+            direction: Query direction ("upstream" or "downstream")
+
+        Returns:
+            Aggregated LineageQueryResult with deduplicated nodes
+        """
+        # Build set of queried column identifiers (lowercase for comparison)
+        queried_set = {col.lower() for col in queried_columns}
+
+        # Aggregate nodes by identifier, tracking min hops and combining paths
+        node_map: Dict[str, LineageNode] = {}
+
+        for result in results:
+            for node in result.related_columns:
+                node_key = node.identifier.lower()
+
+                # Skip nodes that are part of the queried table
+                if node_key in queried_set:
+                    continue
+
+                if node_key not in node_map:
+                    # First occurrence - store the node
+                    node_map[node_key] = LineageNode(
+                        identifier=node.identifier,
+                        file_path=node.file_path,
+                        query_index=node.query_index,
+                        schema_name=node.schema_name,
+                        table=node.table,
+                        column=node.column,
+                        hops=node.hops,
+                        output_column=table,  # Use table as the output reference
+                        is_root=node.is_root,
+                        is_leaf=node.is_leaf,
+                        paths=list(node.paths),
+                    )
+                else:
+                    # Merge with existing node
+                    existing = node_map[node_key]
+                    # Use minimum hops
+                    if node.hops < existing.hops:
+                        existing.hops = node.hops
+                    # Combine paths (avoid duplicates by comparing node lists)
+                    existing_path_sets = {tuple(p.nodes) for p in existing.paths}
+                    for path in node.paths:
+                        if tuple(path.nodes) not in existing_path_sets:
+                            existing.paths.append(path)
+                            existing_path_sets.add(tuple(path.nodes))
+
+        # Sort aggregated nodes by identifier
+        aggregated_nodes = sorted(node_map.values(), key=lambda n: n.identifier.lower())
+
+        return LineageQueryResult(
+            query_column=table,
+            direction=direction,
+            related_columns=aggregated_nodes,
+            queried_columns=queried_columns,
+            is_table_query=True,
+        )
+
+    def find_upstream_table(self, table: str) -> LineageQueryResult:
+        """
+        Find all upstream (source) columns for all columns in a table.
+
+        Aggregates upstream lineage from all columns belonging to the specified
+        table into a single result with deduplicated nodes.
+
+        Args:
+            table: Table identifier to analyze (e.g., "orders" or "prod.orders")
+
+        Returns:
+            LineageQueryResult with aggregated upstream columns
+
+        Raises:
+            ValueError: If no columns found for the table
+        """
+        # Find all columns in the table
+        table_columns = self._find_table_columns(table)
+
+        # Query upstream for each column
+        results = []
+        for column in table_columns:
+            try:
+                result = self.find_upstream(column)
+                results.append(result)
+            except ValueError:
+                # Column exists but might not have upstream - skip
+                pass
+
+        # Aggregate results
+        return self._aggregate_table_results(results, table_columns, table, "upstream")
+
+    def find_downstream_table(self, table: str) -> LineageQueryResult:
+        """
+        Find all downstream (affected) columns for all columns in a table.
+
+        Aggregates downstream lineage from all columns belonging to the specified
+        table into a single result with deduplicated nodes.
+
+        Args:
+            table: Table identifier to analyze (e.g., "orders" or "prod.orders")
+
+        Returns:
+            LineageQueryResult with aggregated downstream columns
+
+        Raises:
+            ValueError: If no columns found for the table
+        """
+        # Find all columns in the table
+        table_columns = self._find_table_columns(table)
+
+        # Query downstream for each column
+        results = []
+        for column in table_columns:
+            try:
+                result = self.find_downstream(column)
+                results.append(result)
+            except ValueError:
+                # Column exists but might not have downstream - skip
+                pass
+
+        # Aggregate results
+        return self._aggregate_table_results(
+            results, table_columns, table, "downstream"
+        )
 
     def list_columns(self) -> List[str]:
         """

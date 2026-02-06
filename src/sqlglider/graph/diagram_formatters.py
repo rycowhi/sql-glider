@@ -74,9 +74,24 @@ def _collect_query_nodes(result: LineageQueryResult) -> Set[str]:
     for node in result.related_columns:
         for path in node.paths:
             nodes.update(path.nodes)
-    # Always include the queried column itself
-    nodes.add(result.query_column)
+    # Include all queried columns (supports table-level queries)
+    nodes.update(result.queried_columns)
     return nodes
+
+
+def _get_queried_column_ids(result: LineageQueryResult) -> Set[str]:
+    """Get the set of queried column identifiers for highlighting.
+
+    For column-level queries, returns just the single queried column.
+    For table-level queries, returns all columns in the queried table.
+
+    Args:
+        result: Query result
+
+    Returns:
+        Set of column identifiers to highlight as "queried"
+    """
+    return set(result.queried_columns)
 
 
 class MermaidFormatter:
@@ -168,10 +183,14 @@ class MermaidFormatter:
                 lines.append(f"    {src_id} --> {tgt_id}")
 
         # Style directives
-        queried_id = _sanitize_mermaid_id(result.query_column)
-        lines.append(
-            f"    style {queried_id} fill:{QUERIED_FILL},stroke:{QUERIED_STROKE},stroke-width:3px"
-        )
+        # Get all queried column IDs (supports table-level queries)
+        queried_ids = {
+            _sanitize_mermaid_id(col) for col in _get_queried_column_ids(result)
+        }
+        for qid in sorted(queried_ids):
+            lines.append(
+                f"    style {qid} fill:{QUERIED_FILL},stroke:{QUERIED_STROKE},stroke-width:3px"
+            )
 
         root_ids = set()
         leaf_ids = set()
@@ -182,17 +201,20 @@ class MermaidFormatter:
                 leaf_ids.add(_sanitize_mermaid_id(node.identifier))
 
         for rid in sorted(root_ids):
-            if rid != queried_id:
+            if rid not in queried_ids:
                 lines.append(f"    style {rid} fill:{ROOT_FILL},stroke:{ROOT_STROKE}")
 
         for lid in sorted(leaf_ids):
-            if lid != queried_id and lid not in root_ids:
+            if lid not in queried_ids and lid not in root_ids:
                 lines.append(f"    style {lid} fill:{LEAF_FILL},stroke:{LEAF_STROKE}")
 
         # Legend
         lines.append("")
         lines.append("    subgraph Legend")
-        lines.append('        legend_queried["Queried Column"]')
+        queried_label = (
+            "Queried Table Columns" if result.is_table_query else "Queried Column"
+        )
+        lines.append(f'        legend_queried["{queried_label}"]')
         lines.append('        legend_root["Root (no upstream)"]')
         lines.append('        legend_leaf["Leaf (no downstream)"]')
         lines.append("    end")
@@ -294,11 +316,16 @@ class DotFormatter:
             "    node [shape=box, style=rounded];",
         ]
 
+        # Get all queried column IDs (supports table-level queries)
+        queried_cols = _get_queried_column_ids(result)
+
         if not result.related_columns:
-            qid = _quote_dot_id(result.query_column)
-            lines.append(
-                f'    {qid} [style="rounded,filled", fillcolor="{QUERIED_FILL}"];'
-            )
+            # Show just the queried column(s)
+            for col in sorted(queried_cols):
+                qid = _quote_dot_id(col)
+                lines.append(
+                    f'    {qid} [style="rounded,filled", fillcolor="{QUERIED_FILL}"];'
+                )
             lines.append("}")
             return "\n".join(lines)
 
@@ -317,7 +344,7 @@ class DotFormatter:
         # Declare nodes with styling
         for identifier in sorted(all_nodes):
             qid = _quote_dot_id(identifier)
-            if identifier == result.query_column:
+            if identifier in queried_cols:
                 lines.append(
                     f'    {qid} [style="rounded,filled", fillcolor="{QUERIED_FILL}"];'
                 )
@@ -341,8 +368,11 @@ class DotFormatter:
         lines.append("    subgraph cluster_legend {")
         lines.append('        label="Legend";')
         lines.append("        style=dashed;")
+        queried_label = (
+            "Queried Table Columns" if result.is_table_query else "Queried Column"
+        )
         lines.append(
-            f'        legend_queried [label="Queried Column", style="rounded,filled", fillcolor="{QUERIED_FILL}"];'
+            f'        legend_queried [label="{queried_label}", style="rounded,filled", fillcolor="{QUERIED_FILL}"];'
         )
         lines.append(
             f'        legend_root [label="Root (no upstream)", style="rounded,filled", fillcolor="{ROOT_FILL}"];'
@@ -716,10 +746,13 @@ class PlotlyFormatter:
             if node.is_leaf:
                 leaf_ids.add(node.identifier)
 
+        # Get all queried column IDs (supports table-level queries)
+        queried_cols = _get_queried_column_ids(result)
+
         # Determine node colors
         node_colors: list[str] = []
         for node in node_list:
-            if node == result.query_column:
+            if node in queried_cols:
                 node_colors.append(QUERIED_FILL)
             elif node in root_ids:
                 node_colors.append(ROOT_FILL)
@@ -790,6 +823,9 @@ class PlotlyFormatter:
         }
 
         # Build legend traces (invisible markers for legend display)
+        queried_legend_label = (
+            "Queried Table Columns" if result.is_table_query else "Queried Column"
+        )
         legend_traces: list[dict[str, Any]] = [
             {
                 "type": "scatter",
@@ -797,7 +833,7 @@ class PlotlyFormatter:
                 "y": [None],
                 "mode": "markers",
                 "marker": {"size": 12, "color": QUERIED_FILL},
-                "name": "Queried Column",
+                "name": queried_legend_label,
                 "showlegend": True,
             },
             {
@@ -821,7 +857,12 @@ class PlotlyFormatter:
         ]
 
         direction_label = "Upstream" if result.direction == "upstream" else "Downstream"
-        title = f"{direction_label} Lineage: {result.query_column}"
+        entity_type = "Table" if result.is_table_query else ""
+        title = (
+            f"{direction_label} Lineage: {entity_type} {result.query_column}".replace(
+                "  ", " "
+            ).strip()
+        )
 
         # Calculate figure dimensions based on graph size
         min_height = 400

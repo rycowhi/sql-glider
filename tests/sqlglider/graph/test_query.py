@@ -1169,3 +1169,477 @@ class TestLineageNodeWithPaths:
         assert data["is_leaf"] is True
         assert len(data["paths"]) == 1
         assert data["paths"][0]["nodes"] == ["a.col", "table.col"]
+
+
+class TestLineageQueryResultTableLevel:
+    """Tests for table-level query result fields."""
+
+    def test_default_queried_columns(self):
+        """Test that queried_columns defaults to [query_column] for column-level queries."""
+        result = LineageQueryResult(
+            query_column="table.col",
+            direction="upstream",
+            related_columns=[],
+        )
+
+        assert result.queried_columns == ["table.col"]
+        assert result.is_table_query is False
+
+    def test_explicit_queried_columns(self):
+        """Test explicit queried_columns for table-level queries."""
+        result = LineageQueryResult(
+            query_column="my_table",
+            direction="upstream",
+            related_columns=[],
+            queried_columns=["my_table.col1", "my_table.col2"],
+            is_table_query=True,
+        )
+
+        assert result.queried_columns == ["my_table.col1", "my_table.col2"]
+        assert result.is_table_query is True
+
+
+class TestFindTableColumns:
+    """Tests for _find_table_columns method."""
+
+    def test_find_by_table_name_only(self):
+        """Test finding columns by table name only (cross-schema)."""
+        nodes = [
+            GraphNode.from_identifier("prod.orders.customer_id", "/q.sql", 0),
+            GraphNode.from_identifier("prod.orders.amount", "/q.sql", 0),
+            GraphNode.from_identifier("staging.orders.customer_id", "/q.sql", 0),
+            GraphNode.from_identifier("prod.customers.id", "/q.sql", 0),
+        ]
+        graph = LineageGraph(nodes=nodes)
+        querier = GraphQuerier(graph)
+
+        columns = querier._find_table_columns("orders")
+
+        # Should match all columns where table == "orders" (cross-schema)
+        assert len(columns) == 3
+        assert "prod.orders.customer_id" in columns
+        assert "prod.orders.amount" in columns
+        assert "staging.orders.customer_id" in columns
+        assert "prod.customers.id" not in columns
+
+    def test_find_by_schema_table(self):
+        """Test finding columns by schema.table prefix."""
+        nodes = [
+            GraphNode.from_identifier("prod.orders.customer_id", "/q.sql", 0),
+            GraphNode.from_identifier("prod.orders.amount", "/q.sql", 0),
+            GraphNode.from_identifier("staging.orders.customer_id", "/q.sql", 0),
+        ]
+        graph = LineageGraph(nodes=nodes)
+        querier = GraphQuerier(graph)
+
+        columns = querier._find_table_columns("prod.orders")
+
+        # Should only match prod.orders columns
+        assert len(columns) == 2
+        assert "prod.orders.customer_id" in columns
+        assert "prod.orders.amount" in columns
+        assert "staging.orders.customer_id" not in columns
+
+    def test_find_case_insensitive(self):
+        """Test case-insensitive table matching."""
+        nodes = [
+            GraphNode.from_identifier("Prod.ORDERS.customer_id", "/q.sql", 0),
+            GraphNode.from_identifier("Prod.ORDERS.amount", "/q.sql", 0),
+        ]
+        graph = LineageGraph(nodes=nodes)
+        querier = GraphQuerier(graph)
+
+        # Different cases
+        columns1 = querier._find_table_columns("orders")
+        columns2 = querier._find_table_columns("ORDERS")
+        columns3 = querier._find_table_columns("prod.orders")
+        columns4 = querier._find_table_columns("PROD.ORDERS")
+
+        assert len(columns1) == 2
+        assert len(columns2) == 2
+        assert len(columns3) == 2
+        assert len(columns4) == 2
+
+    def test_find_table_not_found(self):
+        """Test error when no columns match the table."""
+        nodes = [
+            GraphNode.from_identifier("prod.orders.col", "/q.sql", 0),
+        ]
+        graph = LineageGraph(nodes=nodes)
+        querier = GraphQuerier(graph)
+
+        with pytest.raises(ValueError) as exc_info:
+            querier._find_table_columns("nonexistent")
+        assert "No columns found" in str(exc_info.value)
+
+    def test_find_returns_sorted(self):
+        """Test that results are sorted by identifier."""
+        nodes = [
+            GraphNode.from_identifier("schema.table.z_col", "/q.sql", 0),
+            GraphNode.from_identifier("schema.table.a_col", "/q.sql", 0),
+            GraphNode.from_identifier("schema.table.m_col", "/q.sql", 0),
+        ]
+        graph = LineageGraph(nodes=nodes)
+        querier = GraphQuerier(graph)
+
+        columns = querier._find_table_columns("schema.table")
+
+        # Should be sorted
+        assert columns == [
+            "schema.table.a_col",
+            "schema.table.m_col",
+            "schema.table.z_col",
+        ]
+
+
+class TestUpstreamTableQuery:
+    """Tests for find_upstream_table method."""
+
+    def test_basic_upstream_table(self):
+        """Test basic table-level upstream query."""
+        # src.col1 -> target.col1, src.col2 -> target.col2
+        nodes = [
+            GraphNode.from_identifier("src.col1", "/q.sql", 0),
+            GraphNode.from_identifier("src.col2", "/q.sql", 0),
+            GraphNode.from_identifier("target.col1", "/q.sql", 0),
+            GraphNode.from_identifier("target.col2", "/q.sql", 0),
+        ]
+        edges = [
+            GraphEdge(
+                source_node="src.col1",
+                target_node="target.col1",
+                file_path="/q.sql",
+                query_index=0,
+            ),
+            GraphEdge(
+                source_node="src.col2",
+                target_node="target.col2",
+                file_path="/q.sql",
+                query_index=0,
+            ),
+        ]
+        graph = LineageGraph(nodes=nodes, edges=edges)
+        querier = GraphQuerier(graph)
+
+        result = querier.find_upstream_table("target")
+
+        assert result.is_table_query is True
+        assert result.query_column == "target"
+        assert result.direction == "upstream"
+        assert set(result.queried_columns) == {"target.col1", "target.col2"}
+
+        # Should find src.col1 and src.col2
+        identifiers = {n.identifier for n in result.related_columns}
+        assert identifiers == {"src.col1", "src.col2"}
+
+    def test_upstream_table_deduplicates_nodes(self):
+        """Test that nodes appearing in multiple column lineages are deduplicated."""
+        # common.col -> target.col1, common.col -> target.col2
+        nodes = [
+            GraphNode.from_identifier("common.col", "/q.sql", 0),
+            GraphNode.from_identifier("target.col1", "/q.sql", 0),
+            GraphNode.from_identifier("target.col2", "/q.sql", 0),
+        ]
+        edges = [
+            GraphEdge(
+                source_node="common.col",
+                target_node="target.col1",
+                file_path="/q.sql",
+                query_index=0,
+            ),
+            GraphEdge(
+                source_node="common.col",
+                target_node="target.col2",
+                file_path="/q.sql",
+                query_index=0,
+            ),
+        ]
+        graph = LineageGraph(nodes=nodes, edges=edges)
+        querier = GraphQuerier(graph)
+
+        result = querier.find_upstream_table("target")
+
+        # common.col should appear only once
+        identifiers = [n.identifier for n in result.related_columns]
+        assert identifiers == ["common.col"]
+
+    def test_upstream_table_uses_min_hops(self):
+        """Test that min hops is used when same node appears at different distances."""
+        # far.col -> mid.col -> target.col1
+        # far.col -> target.col2 (direct)
+        nodes = [
+            GraphNode.from_identifier("far.col", "/q.sql", 0),
+            GraphNode.from_identifier("mid.col", "/q.sql", 0),
+            GraphNode.from_identifier("target.col1", "/q.sql", 0),
+            GraphNode.from_identifier("target.col2", "/q.sql", 0),
+        ]
+        edges = [
+            GraphEdge(
+                source_node="far.col",
+                target_node="mid.col",
+                file_path="/q.sql",
+                query_index=0,
+            ),
+            GraphEdge(
+                source_node="mid.col",
+                target_node="target.col1",
+                file_path="/q.sql",
+                query_index=0,
+            ),
+            GraphEdge(
+                source_node="far.col",
+                target_node="target.col2",
+                file_path="/q.sql",
+                query_index=0,
+            ),
+        ]
+        graph = LineageGraph(nodes=nodes, edges=edges)
+        querier = GraphQuerier(graph)
+
+        result = querier.find_upstream_table("target")
+
+        far_node = next(n for n in result.related_columns if n.identifier == "far.col")
+        # far.col is 2 hops from target.col1 but 1 hop from target.col2
+        # Should use min hops = 1
+        assert far_node.hops == 1
+
+    def test_upstream_table_combines_paths(self):
+        """Test that paths from all queried columns are combined."""
+        # src1.col -> target.col1, src2.col -> target.col2
+        nodes = [
+            GraphNode.from_identifier("src1.col", "/q.sql", 0),
+            GraphNode.from_identifier("src2.col", "/q.sql", 0),
+            GraphNode.from_identifier("target.col1", "/q.sql", 0),
+            GraphNode.from_identifier("target.col2", "/q.sql", 0),
+        ]
+        edges = [
+            GraphEdge(
+                source_node="src1.col",
+                target_node="target.col1",
+                file_path="/q.sql",
+                query_index=0,
+            ),
+            GraphEdge(
+                source_node="src2.col",
+                target_node="target.col2",
+                file_path="/q.sql",
+                query_index=0,
+            ),
+        ]
+        graph = LineageGraph(nodes=nodes, edges=edges)
+        querier = GraphQuerier(graph)
+
+        result = querier.find_upstream_table("target")
+
+        src1_node = next(
+            n for n in result.related_columns if n.identifier == "src1.col"
+        )
+        src2_node = next(
+            n for n in result.related_columns if n.identifier == "src2.col"
+        )
+
+        assert len(src1_node.paths) == 1
+        assert len(src2_node.paths) == 1
+
+    def test_upstream_table_excludes_own_columns(self):
+        """Test that the table's own columns are excluded from related_columns."""
+        # target.col1 -> target.col2 (self-referential within table)
+        # src.col -> target.col1
+        nodes = [
+            GraphNode.from_identifier("src.col", "/q.sql", 0),
+            GraphNode.from_identifier("target.col1", "/q.sql", 0),
+            GraphNode.from_identifier("target.col2", "/q.sql", 0),
+        ]
+        edges = [
+            GraphEdge(
+                source_node="src.col",
+                target_node="target.col1",
+                file_path="/q.sql",
+                query_index=0,
+            ),
+            GraphEdge(
+                source_node="target.col1",
+                target_node="target.col2",
+                file_path="/q.sql",
+                query_index=0,
+            ),
+        ]
+        graph = LineageGraph(nodes=nodes, edges=edges)
+        querier = GraphQuerier(graph)
+
+        result = querier.find_upstream_table("target")
+
+        # Only src.col should appear, not target.col1
+        identifiers = {n.identifier for n in result.related_columns}
+        assert identifiers == {"src.col"}
+
+    def test_upstream_table_empty_result(self):
+        """Test table with no upstream dependencies."""
+        nodes = [
+            GraphNode.from_identifier("target.col1", "/q.sql", 0),
+            GraphNode.from_identifier("target.col2", "/q.sql", 0),
+        ]
+        graph = LineageGraph(nodes=nodes)
+        querier = GraphQuerier(graph)
+
+        result = querier.find_upstream_table("target")
+
+        assert result.is_table_query is True
+        assert len(result.related_columns) == 0
+        assert set(result.queried_columns) == {"target.col1", "target.col2"}
+
+
+class TestDownstreamTableQuery:
+    """Tests for find_downstream_table method."""
+
+    def test_basic_downstream_table(self):
+        """Test basic table-level downstream query."""
+        # source.col1 -> target.col1, source.col2 -> target.col2
+        nodes = [
+            GraphNode.from_identifier("source.col1", "/q.sql", 0),
+            GraphNode.from_identifier("source.col2", "/q.sql", 0),
+            GraphNode.from_identifier("target.col1", "/q.sql", 0),
+            GraphNode.from_identifier("target.col2", "/q.sql", 0),
+        ]
+        edges = [
+            GraphEdge(
+                source_node="source.col1",
+                target_node="target.col1",
+                file_path="/q.sql",
+                query_index=0,
+            ),
+            GraphEdge(
+                source_node="source.col2",
+                target_node="target.col2",
+                file_path="/q.sql",
+                query_index=0,
+            ),
+        ]
+        graph = LineageGraph(nodes=nodes, edges=edges)
+        querier = GraphQuerier(graph)
+
+        result = querier.find_downstream_table("source")
+
+        assert result.is_table_query is True
+        assert result.query_column == "source"
+        assert result.direction == "downstream"
+        assert set(result.queried_columns) == {"source.col1", "source.col2"}
+
+        # Should find target.col1 and target.col2
+        identifiers = {n.identifier for n in result.related_columns}
+        assert identifiers == {"target.col1", "target.col2"}
+
+    def test_downstream_table_deduplicates_nodes(self):
+        """Test that nodes appearing in multiple column lineages are deduplicated."""
+        # source.col1 -> common.col, source.col2 -> common.col
+        nodes = [
+            GraphNode.from_identifier("source.col1", "/q.sql", 0),
+            GraphNode.from_identifier("source.col2", "/q.sql", 0),
+            GraphNode.from_identifier("common.col", "/q.sql", 0),
+        ]
+        edges = [
+            GraphEdge(
+                source_node="source.col1",
+                target_node="common.col",
+                file_path="/q.sql",
+                query_index=0,
+            ),
+            GraphEdge(
+                source_node="source.col2",
+                target_node="common.col",
+                file_path="/q.sql",
+                query_index=0,
+            ),
+        ]
+        graph = LineageGraph(nodes=nodes, edges=edges)
+        querier = GraphQuerier(graph)
+
+        result = querier.find_downstream_table("source")
+
+        # common.col should appear only once
+        identifiers = [n.identifier for n in result.related_columns]
+        assert identifiers == ["common.col"]
+
+    def test_downstream_table_excludes_own_columns(self):
+        """Test that the table's own columns are excluded from related_columns."""
+        # source.col1 -> source.col2 (self-referential)
+        # source.col2 -> target.col
+        nodes = [
+            GraphNode.from_identifier("source.col1", "/q.sql", 0),
+            GraphNode.from_identifier("source.col2", "/q.sql", 0),
+            GraphNode.from_identifier("target.col", "/q.sql", 0),
+        ]
+        edges = [
+            GraphEdge(
+                source_node="source.col1",
+                target_node="source.col2",
+                file_path="/q.sql",
+                query_index=0,
+            ),
+            GraphEdge(
+                source_node="source.col2",
+                target_node="target.col",
+                file_path="/q.sql",
+                query_index=0,
+            ),
+        ]
+        graph = LineageGraph(nodes=nodes, edges=edges)
+        querier = GraphQuerier(graph)
+
+        result = querier.find_downstream_table("source")
+
+        # Only target.col should appear, not source.col2
+        identifiers = {n.identifier for n in result.related_columns}
+        assert identifiers == {"target.col"}
+
+
+class TestSingleColumnTable:
+    """Tests for tables with only one column."""
+
+    def test_single_column_table_upstream(self):
+        """Test upstream query for table with single column."""
+        nodes = [
+            GraphNode.from_identifier("src.col", "/q.sql", 0),
+            GraphNode.from_identifier("target.single_col", "/q.sql", 0),
+        ]
+        edges = [
+            GraphEdge(
+                source_node="src.col",
+                target_node="target.single_col",
+                file_path="/q.sql",
+                query_index=0,
+            )
+        ]
+        graph = LineageGraph(nodes=nodes, edges=edges)
+        querier = GraphQuerier(graph)
+
+        result = querier.find_upstream_table("target")
+
+        assert result.is_table_query is True
+        assert result.queried_columns == ["target.single_col"]
+        assert len(result.related_columns) == 1
+        assert result.related_columns[0].identifier == "src.col"
+
+    def test_single_column_table_downstream(self):
+        """Test downstream query for table with single column."""
+        nodes = [
+            GraphNode.from_identifier("source.single_col", "/q.sql", 0),
+            GraphNode.from_identifier("target.col", "/q.sql", 0),
+        ]
+        edges = [
+            GraphEdge(
+                source_node="source.single_col",
+                target_node="target.col",
+                file_path="/q.sql",
+                query_index=0,
+            )
+        ]
+        graph = LineageGraph(nodes=nodes, edges=edges)
+        querier = GraphQuerier(graph)
+
+        result = querier.find_downstream_table("source")
+
+        assert result.is_table_query is True
+        assert result.queried_columns == ["source.single_col"]
+        assert len(result.related_columns) == 1
+        assert result.related_columns[0].identifier == "target.col"

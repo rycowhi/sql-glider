@@ -1630,13 +1630,19 @@ def graph_query(
         None,
         "--upstream",
         "-u",
-        help="Find all source columns that contribute to this column",
+        help="Find all source columns that contribute to this column or table",
     ),
     downstream: Optional[str] = typer.Option(
         None,
         "--downstream",
         "-d",
-        help="Find all columns affected by this source column",
+        help="Find all columns affected by this source column or table",
+    ),
+    level: str = typer.Option(
+        "column",
+        "--level",
+        "-l",
+        help="Query level: 'column' (specific column) or 'table' (all columns in table)",
     ),
     output_format: str = typer.Option(
         "text",
@@ -1650,11 +1656,17 @@ def graph_query(
 
     Examples:
 
-        # Find all source columns for a target
+        # Find all source columns for a target column
         sqlglider graph query graph.json --upstream orders.customer_id
 
-        # Find all columns affected by a source
+        # Find all columns affected by a source column
         sqlglider graph query graph.json --downstream customers.customer_id
+
+        # Find all sources for ALL columns in a table
+        sqlglider graph query graph.json --upstream prod.orders --level table
+
+        # Find all columns affected by ANY column in a table
+        sqlglider graph query graph.json --downstream customers --level table
 
         # JSON output
         sqlglider graph query graph.json --upstream orders.total -f json
@@ -1696,14 +1708,27 @@ def graph_query(
         )
         raise typer.Exit(1)
 
+    if level not in ["column", "table"]:
+        err_console.print(
+            f"[red]Error:[/red] Invalid level '{level}'. Use 'column' or 'table'."
+        )
+        raise typer.Exit(1)
+
     try:
         querier = GraphQuerier.from_file(graph_file)
 
-        if upstream:
-            result = querier.find_upstream(upstream)
+        if level == "table":
+            if upstream:
+                result = querier.find_upstream_table(upstream)
+            else:
+                assert downstream is not None  # Validated above
+                result = querier.find_downstream_table(downstream)
         else:
-            assert downstream is not None  # Validated above
-            result = querier.find_downstream(downstream)
+            if upstream:
+                result = querier.find_upstream(upstream)
+            else:
+                assert downstream is not None  # Validated above
+                result = querier.find_downstream(downstream)
 
         # Format and output
         if output_format == "text":
@@ -1756,7 +1781,13 @@ def _format_query_result_text(result) -> None:
         "Sources" if result.direction == "upstream" else "Affected Columns"
     )
 
-    table = Table(title=f"{direction_label} for '{result.query_column}'")
+    # Adjust title for table-level queries
+    if result.is_table_query:
+        title = f"{direction_label} for Table '{result.query_column}'"
+    else:
+        title = f"{direction_label} for '{result.query_column}'"
+
+    table = Table(title=title)
     table.add_column("Column", style="cyan")
     table.add_column("Table", style="green")
     table.add_column("Hops", style="yellow", justify="right")
@@ -1788,6 +1819,11 @@ def _format_query_result_text(result) -> None:
     else:
         console.print(table)
         console.print(f"\n[dim]Total: {len(result)} column(s)[/dim]")
+        # Show queried columns for table-level queries
+        if result.is_table_query and len(result.queried_columns) > 1:
+            console.print(
+                f"[dim]Queried columns: {', '.join(result.queried_columns)}[/dim]"
+            )
 
 
 def _format_query_result_json(result) -> None:
@@ -1802,6 +1838,8 @@ def _format_query_result_json(result) -> None:
     output = {
         "query_column": result.query_column,
         "direction": result.direction,
+        "is_table_query": result.is_table_query,
+        "queried_columns": result.queried_columns,
         "count": len(result),
         "columns": columns,
     }
@@ -1811,7 +1849,7 @@ def _format_query_result_json(result) -> None:
 def _format_query_result_csv(result) -> None:
     """Format query result as CSV."""
     print(
-        "identifier,table,column,hops,output_column,is_root,is_leaf,paths,file_path,query_index"
+        "identifier,table,column,hops,output_column,is_root,is_leaf,paths,file_path,query_index,is_table_query"
     )
     for node in result.related_columns:
         file_path = node.file_path.replace('"', '""') if node.file_path else ""
@@ -1826,7 +1864,8 @@ def _format_query_result_csv(result) -> None:
             f'{node.hops},"{node.output_column}",'
             f"{'true' if node.is_root else 'false'},"
             f"{'true' if node.is_leaf else 'false'},"
-            f'"{paths_str}","{file_path}",{node.query_index}'
+            f'"{paths_str}","{file_path}",{node.query_index},'
+            f"{'true' if result.is_table_query else 'false'}"
         )
 
 
