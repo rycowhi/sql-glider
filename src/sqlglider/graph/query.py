@@ -462,6 +462,186 @@ class GraphQuerier:
             results, table_columns, table, "downstream"
         )
 
+    def _aggregate_multi_results(
+        self,
+        results: List[LineageQueryResult],
+        queried_columns: List[str],
+        query_label: str,
+        direction: str,
+        is_table_query: bool,
+    ) -> LineageQueryResult:
+        """
+        Aggregate multiple query results into a single result.
+
+        Similar to _aggregate_table_results but does not exclude queried columns
+        from results (since each query target is independent).
+
+        Args:
+            results: List of per-column/table LineageQueryResult objects
+            queried_columns: List of column/table identifiers that were queried
+            query_label: Display label for the combined query
+            direction: Query direction ("upstream" or "downstream")
+            is_table_query: Whether this is a table-level query
+
+        Returns:
+            Aggregated LineageQueryResult with deduplicated nodes
+        """
+        # For table queries, build set of all columns across all queried tables
+        # so we can exclude them from results (same as single-table behavior)
+        if is_table_query:
+            queried_set: set[str] = set()
+            for result in results:
+                queried_set.update(col.lower() for col in result.queried_columns)
+        else:
+            queried_set = {col.lower() for col in queried_columns}
+
+        # Aggregate nodes by identifier, tracking min hops and combining paths
+        node_map: Dict[str, LineageNode] = {}
+
+        for result in results:
+            for node in result.related_columns:
+                node_key = node.identifier.lower()
+
+                # Skip nodes that are one of the queried targets
+                if node_key in queried_set:
+                    continue
+
+                if node_key not in node_map:
+                    node_map[node_key] = LineageNode(
+                        identifier=node.identifier,
+                        file_path=node.file_path,
+                        query_index=node.query_index,
+                        schema_name=node.schema_name,
+                        table=node.table,
+                        column=node.column,
+                        hops=node.hops,
+                        output_column=query_label,
+                        is_root=node.is_root,
+                        is_leaf=node.is_leaf,
+                        paths=list(node.paths),
+                    )
+                else:
+                    existing = node_map[node_key]
+                    if node.hops < existing.hops:
+                        existing.hops = node.hops
+                    existing_path_sets = {tuple(p.nodes) for p in existing.paths}
+                    for path in node.paths:
+                        if tuple(path.nodes) not in existing_path_sets:
+                            existing.paths.append(path)
+                            existing_path_sets.add(tuple(path.nodes))
+
+        aggregated_nodes = sorted(node_map.values(), key=lambda n: n.identifier.lower())
+
+        # Collect all queried columns across all results for table queries
+        all_queried_columns = queried_columns
+        if is_table_query:
+            all_queried_cols: list[str] = []
+            for result in results:
+                all_queried_cols.extend(result.queried_columns)
+            # Deduplicate while preserving order
+            seen: set[str] = set()
+            all_queried_columns = []
+            for col in all_queried_cols:
+                if col.lower() not in seen:
+                    all_queried_columns.append(col)
+                    seen.add(col.lower())
+
+        return LineageQueryResult(
+            query_column=query_label,
+            direction=direction,
+            related_columns=aggregated_nodes,
+            queried_columns=all_queried_columns,
+            is_table_query=is_table_query,
+        )
+
+    def find_upstream_multi(self, columns: List[str]) -> LineageQueryResult:
+        """
+        Find all upstream (source) columns for multiple target columns.
+
+        Args:
+            columns: List of column identifiers to analyze
+
+        Returns:
+            Aggregated LineageQueryResult with upstream columns
+
+        Raises:
+            ValueError: If any column is not found in graph
+        """
+        results = []
+        for column in columns:
+            results.append(self.find_upstream(column))
+
+        query_label = ", ".join(r.query_column for r in results)
+        return self._aggregate_multi_results(
+            results, [r.query_column for r in results], query_label, "upstream", False
+        )
+
+    def find_downstream_multi(self, columns: List[str]) -> LineageQueryResult:
+        """
+        Find all downstream (affected) columns for multiple source columns.
+
+        Args:
+            columns: List of column identifiers to analyze
+
+        Returns:
+            Aggregated LineageQueryResult with downstream columns
+
+        Raises:
+            ValueError: If any column is not found in graph
+        """
+        results = []
+        for column in columns:
+            results.append(self.find_downstream(column))
+
+        query_label = ", ".join(r.query_column for r in results)
+        return self._aggregate_multi_results(
+            results, [r.query_column for r in results], query_label, "downstream", False
+        )
+
+    def find_upstream_table_multi(self, tables: List[str]) -> LineageQueryResult:
+        """
+        Find all upstream (source) columns for all columns in multiple tables.
+
+        Args:
+            tables: List of table identifiers to analyze
+
+        Returns:
+            Aggregated LineageQueryResult with upstream columns
+
+        Raises:
+            ValueError: If no columns found for any table
+        """
+        results = []
+        for table in tables:
+            results.append(self.find_upstream_table(table))
+
+        query_label = ", ".join(r.query_column for r in results)
+        return self._aggregate_multi_results(
+            results, tables, query_label, "upstream", True
+        )
+
+    def find_downstream_table_multi(self, tables: List[str]) -> LineageQueryResult:
+        """
+        Find all downstream (affected) columns for all columns in multiple tables.
+
+        Args:
+            tables: List of table identifiers to analyze
+
+        Returns:
+            Aggregated LineageQueryResult with downstream columns
+
+        Raises:
+            ValueError: If no columns found for any table
+        """
+        results = []
+        for table in tables:
+            results.append(self.find_downstream_table(table))
+
+        query_label = ", ".join(r.query_column for r in results)
+        return self._aggregate_multi_results(
+            results, tables, query_label, "downstream", True
+        )
+
     def list_columns(self) -> List[str]:
         """
         List all column identifiers in the graph.

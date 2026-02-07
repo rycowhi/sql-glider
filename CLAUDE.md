@@ -264,11 +264,17 @@ uv run sqlglider graph query graph.json --upstream orders.customer_id
 # Query downstream dependencies (column-level)
 uv run sqlglider graph query graph.json --downstream customers.id
 
+# Query multiple columns at once (comma-separated)
+uv run sqlglider graph query graph.json --upstream orders.customer_id,orders.total
+
 # Query upstream dependencies for ALL columns in a table (table-level)
 uv run sqlglider graph query graph.json --upstream prod.orders --level table
 
 # Query downstream dependencies for ALL columns in a table (table-level)
 uv run sqlglider graph query graph.json --downstream customers --level table
+
+# Query multiple tables at once (comma-separated)
+uv run sqlglider graph query graph.json --upstream orders,customers --level table
 
 # Query with JSON output
 uv run sqlglider graph query graph.json --upstream orders.total -f json

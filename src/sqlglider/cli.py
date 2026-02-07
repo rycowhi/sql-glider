@@ -1630,13 +1630,13 @@ def graph_query(
         None,
         "--upstream",
         "-u",
-        help="Find all source columns that contribute to this column or table",
+        help="Find all source columns that contribute to this column or table. Supports comma-separated list.",
     ),
     downstream: Optional[str] = typer.Option(
         None,
         "--downstream",
         "-d",
-        help="Find all columns affected by this source column or table",
+        help="Find all columns affected by this source column or table. Supports comma-separated list.",
     ),
     level: str = typer.Option(
         "column",
@@ -1654,6 +1654,8 @@ def graph_query(
     """
     Query a lineage graph for upstream or downstream dependencies.
 
+    Supports comma-separated lists for querying multiple columns or tables at once.
+
     Examples:
 
         # Find all source columns for a target column
@@ -1662,8 +1664,14 @@ def graph_query(
         # Find all columns affected by a source column
         sqlglider graph query graph.json --downstream customers.customer_id
 
+        # Query multiple columns at once (comma-separated)
+        sqlglider graph query graph.json --downstream col_a,col_b
+
         # Find all sources for ALL columns in a table
         sqlglider graph query graph.json --upstream prod.orders --level table
+
+        # Query multiple tables at once
+        sqlglider graph query graph.json --upstream tbl_one,tbl_two --level table
 
         # Find all columns affected by ANY column in a table
         sqlglider graph query graph.json --downstream customers --level table
@@ -1717,18 +1725,41 @@ def graph_query(
     try:
         querier = GraphQuerier.from_file(graph_file)
 
+        # Parse comma-separated values
+        if upstream:
+            targets = [t.strip() for t in upstream.split(",") if t.strip()]
+        else:
+            assert downstream is not None  # Validated above
+            targets = [t.strip() for t in downstream.split(",") if t.strip()]
+
+        is_multi = len(targets) > 1
+
         if level == "table":
             if upstream:
-                result = querier.find_upstream_table(upstream)
+                result = (
+                    querier.find_upstream_table_multi(targets)
+                    if is_multi
+                    else querier.find_upstream_table(targets[0])
+                )
             else:
-                assert downstream is not None  # Validated above
-                result = querier.find_downstream_table(downstream)
+                result = (
+                    querier.find_downstream_table_multi(targets)
+                    if is_multi
+                    else querier.find_downstream_table(targets[0])
+                )
         else:
             if upstream:
-                result = querier.find_upstream(upstream)
+                result = (
+                    querier.find_upstream_multi(targets)
+                    if is_multi
+                    else querier.find_upstream(targets[0])
+                )
             else:
-                assert downstream is not None  # Validated above
-                result = querier.find_downstream(downstream)
+                result = (
+                    querier.find_downstream_multi(targets)
+                    if is_multi
+                    else querier.find_downstream(targets[0])
+                )
 
         # Format and output
         if output_format == "text":

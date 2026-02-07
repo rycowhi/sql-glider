@@ -382,6 +382,10 @@ uv run sqlglider graph query graph.json --upstream orders.customer_id
 # Query downstream dependencies (find all columns affected by a source)
 uv run sqlglider graph query graph.json --downstream customers.id
 
+# Query multiple columns or tables at once (comma-separated)
+uv run sqlglider graph query graph.json --downstream col_a,col_b
+uv run sqlglider graph query graph.json --upstream tbl_one,tbl_two --level table
+
 # Query with Mermaid diagram output
 uv run sqlglider graph query graph.json --upstream orders.customer_id -f mermaid
 

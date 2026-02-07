@@ -1643,3 +1643,468 @@ class TestSingleColumnTable:
         assert result.queried_columns == ["source.single_col"]
         assert len(result.related_columns) == 1
         assert result.related_columns[0].identifier == "target.col"
+
+
+class TestMultiColumnUpstream:
+    """Tests for find_upstream_multi method."""
+
+    def test_basic_multi_upstream(self):
+        """Test upstream query for multiple columns."""
+        # src1.col -> target1.col, src2.col -> target2.col
+        nodes = [
+            GraphNode.from_identifier("src1.col", "/q.sql", 0),
+            GraphNode.from_identifier("src2.col", "/q.sql", 0),
+            GraphNode.from_identifier("target1.col", "/q.sql", 0),
+            GraphNode.from_identifier("target2.col", "/q.sql", 0),
+        ]
+        edges = [
+            GraphEdge(
+                source_node="src1.col",
+                target_node="target1.col",
+                file_path="/q.sql",
+                query_index=0,
+            ),
+            GraphEdge(
+                source_node="src2.col",
+                target_node="target2.col",
+                file_path="/q.sql",
+                query_index=0,
+            ),
+        ]
+        graph = LineageGraph(nodes=nodes, edges=edges)
+        querier = GraphQuerier(graph)
+
+        result = querier.find_upstream_multi(["target1.col", "target2.col"])
+
+        assert result.direction == "upstream"
+        assert result.is_table_query is False
+        identifiers = {n.identifier for n in result.related_columns}
+        assert identifiers == {"src1.col", "src2.col"}
+
+    def test_multi_upstream_deduplicates_shared_source(self):
+        """Test that a shared source is deduplicated across multiple targets."""
+        # common.col -> target1.col, common.col -> target2.col
+        nodes = [
+            GraphNode.from_identifier("common.col", "/q.sql", 0),
+            GraphNode.from_identifier("target1.col", "/q.sql", 0),
+            GraphNode.from_identifier("target2.col", "/q.sql", 0),
+        ]
+        edges = [
+            GraphEdge(
+                source_node="common.col",
+                target_node="target1.col",
+                file_path="/q.sql",
+                query_index=0,
+            ),
+            GraphEdge(
+                source_node="common.col",
+                target_node="target2.col",
+                file_path="/q.sql",
+                query_index=0,
+            ),
+        ]
+        graph = LineageGraph(nodes=nodes, edges=edges)
+        querier = GraphQuerier(graph)
+
+        result = querier.find_upstream_multi(["target1.col", "target2.col"])
+
+        identifiers = [n.identifier for n in result.related_columns]
+        assert identifiers == ["common.col"]
+
+    def test_multi_upstream_uses_min_hops(self):
+        """Test that min hops is used when same node appears at different distances."""
+        # far.col -> mid.col -> target1.col
+        # far.col -> target2.col (direct)
+        nodes = [
+            GraphNode.from_identifier("far.col", "/q.sql", 0),
+            GraphNode.from_identifier("mid.col", "/q.sql", 0),
+            GraphNode.from_identifier("target1.col", "/q.sql", 0),
+            GraphNode.from_identifier("target2.col", "/q.sql", 0),
+        ]
+        edges = [
+            GraphEdge(
+                source_node="far.col",
+                target_node="mid.col",
+                file_path="/q.sql",
+                query_index=0,
+            ),
+            GraphEdge(
+                source_node="mid.col",
+                target_node="target1.col",
+                file_path="/q.sql",
+                query_index=0,
+            ),
+            GraphEdge(
+                source_node="far.col",
+                target_node="target2.col",
+                file_path="/q.sql",
+                query_index=0,
+            ),
+        ]
+        graph = LineageGraph(nodes=nodes, edges=edges)
+        querier = GraphQuerier(graph)
+
+        result = querier.find_upstream_multi(["target1.col", "target2.col"])
+
+        far_node = next(n for n in result.related_columns if n.identifier == "far.col")
+        # far.col is 2 hops from target1.col but 1 hop from target2.col
+        assert far_node.hops == 1
+
+    def test_multi_upstream_excludes_queried_columns(self):
+        """Test that queried columns are excluded from results."""
+        # target1.col -> target2.col, src.col -> target1.col
+        nodes = [
+            GraphNode.from_identifier("src.col", "/q.sql", 0),
+            GraphNode.from_identifier("target1.col", "/q.sql", 0),
+            GraphNode.from_identifier("target2.col", "/q.sql", 0),
+        ]
+        edges = [
+            GraphEdge(
+                source_node="src.col",
+                target_node="target1.col",
+                file_path="/q.sql",
+                query_index=0,
+            ),
+            GraphEdge(
+                source_node="target1.col",
+                target_node="target2.col",
+                file_path="/q.sql",
+                query_index=0,
+            ),
+        ]
+        graph = LineageGraph(nodes=nodes, edges=edges)
+        querier = GraphQuerier(graph)
+
+        result = querier.find_upstream_multi(["target1.col", "target2.col"])
+
+        # target1.col is upstream of target2.col but should be excluded
+        # since it's one of the queried columns
+        identifiers = {n.identifier for n in result.related_columns}
+        assert identifiers == {"src.col"}
+
+    def test_multi_upstream_query_label(self):
+        """Test that query_column is a comma-separated label."""
+        nodes = [
+            GraphNode.from_identifier("src.col", "/q.sql", 0),
+            GraphNode.from_identifier("target1.col", "/q.sql", 0),
+            GraphNode.from_identifier("target2.col", "/q.sql", 0),
+        ]
+        edges = [
+            GraphEdge(
+                source_node="src.col",
+                target_node="target1.col",
+                file_path="/q.sql",
+                query_index=0,
+            ),
+            GraphEdge(
+                source_node="src.col",
+                target_node="target2.col",
+                file_path="/q.sql",
+                query_index=0,
+            ),
+        ]
+        graph = LineageGraph(nodes=nodes, edges=edges)
+        querier = GraphQuerier(graph)
+
+        result = querier.find_upstream_multi(["target1.col", "target2.col"])
+
+        assert "target1.col" in result.query_column
+        assert "target2.col" in result.query_column
+
+    def test_multi_upstream_single_column_raises_on_not_found(self):
+        """Test that ValueError is raised if any column is not found."""
+        nodes = [
+            GraphNode.from_identifier("src.col", "/q.sql", 0),
+            GraphNode.from_identifier("target.col", "/q.sql", 0),
+        ]
+        edges = [
+            GraphEdge(
+                source_node="src.col",
+                target_node="target.col",
+                file_path="/q.sql",
+                query_index=0,
+            ),
+        ]
+        graph = LineageGraph(nodes=nodes, edges=edges)
+        querier = GraphQuerier(graph)
+
+        with pytest.raises(ValueError, match="not found"):
+            querier.find_upstream_multi(["target.col", "nonexistent.col"])
+
+
+class TestMultiColumnDownstream:
+    """Tests for find_downstream_multi method."""
+
+    def test_basic_multi_downstream(self):
+        """Test downstream query for multiple columns."""
+        # source1.col -> target1.col, source2.col -> target2.col
+        nodes = [
+            GraphNode.from_identifier("source1.col", "/q.sql", 0),
+            GraphNode.from_identifier("source2.col", "/q.sql", 0),
+            GraphNode.from_identifier("target1.col", "/q.sql", 0),
+            GraphNode.from_identifier("target2.col", "/q.sql", 0),
+        ]
+        edges = [
+            GraphEdge(
+                source_node="source1.col",
+                target_node="target1.col",
+                file_path="/q.sql",
+                query_index=0,
+            ),
+            GraphEdge(
+                source_node="source2.col",
+                target_node="target2.col",
+                file_path="/q.sql",
+                query_index=0,
+            ),
+        ]
+        graph = LineageGraph(nodes=nodes, edges=edges)
+        querier = GraphQuerier(graph)
+
+        result = querier.find_downstream_multi(["source1.col", "source2.col"])
+
+        assert result.direction == "downstream"
+        assert result.is_table_query is False
+        identifiers = {n.identifier for n in result.related_columns}
+        assert identifiers == {"target1.col", "target2.col"}
+
+    def test_multi_downstream_deduplicates_shared_target(self):
+        """Test that a shared target is deduplicated across multiple sources."""
+        # source1.col -> common.col, source2.col -> common.col
+        nodes = [
+            GraphNode.from_identifier("source1.col", "/q.sql", 0),
+            GraphNode.from_identifier("source2.col", "/q.sql", 0),
+            GraphNode.from_identifier("common.col", "/q.sql", 0),
+        ]
+        edges = [
+            GraphEdge(
+                source_node="source1.col",
+                target_node="common.col",
+                file_path="/q.sql",
+                query_index=0,
+            ),
+            GraphEdge(
+                source_node="source2.col",
+                target_node="common.col",
+                file_path="/q.sql",
+                query_index=0,
+            ),
+        ]
+        graph = LineageGraph(nodes=nodes, edges=edges)
+        querier = GraphQuerier(graph)
+
+        result = querier.find_downstream_multi(["source1.col", "source2.col"])
+
+        identifiers = [n.identifier for n in result.related_columns]
+        assert identifiers == ["common.col"]
+
+    def test_multi_downstream_excludes_queried_columns(self):
+        """Test that queried columns are excluded from results."""
+        # source1.col -> source2.col -> target.col
+        nodes = [
+            GraphNode.from_identifier("source1.col", "/q.sql", 0),
+            GraphNode.from_identifier("source2.col", "/q.sql", 0),
+            GraphNode.from_identifier("target.col", "/q.sql", 0),
+        ]
+        edges = [
+            GraphEdge(
+                source_node="source1.col",
+                target_node="source2.col",
+                file_path="/q.sql",
+                query_index=0,
+            ),
+            GraphEdge(
+                source_node="source2.col",
+                target_node="target.col",
+                file_path="/q.sql",
+                query_index=0,
+            ),
+        ]
+        graph = LineageGraph(nodes=nodes, edges=edges)
+        querier = GraphQuerier(graph)
+
+        result = querier.find_downstream_multi(["source1.col", "source2.col"])
+
+        # source2.col is downstream of source1.col but should be excluded
+        identifiers = {n.identifier for n in result.related_columns}
+        assert identifiers == {"target.col"}
+
+
+class TestMultiTableUpstream:
+    """Tests for find_upstream_table_multi method."""
+
+    def test_basic_multi_table_upstream(self):
+        """Test upstream query for multiple tables."""
+        # src.col1 -> tbl_a.col1, src.col2 -> tbl_b.col1
+        nodes = [
+            GraphNode.from_identifier("src.col1", "/q.sql", 0),
+            GraphNode.from_identifier("src.col2", "/q.sql", 0),
+            GraphNode.from_identifier("tbl_a.col1", "/q.sql", 0),
+            GraphNode.from_identifier("tbl_b.col1", "/q.sql", 0),
+        ]
+        edges = [
+            GraphEdge(
+                source_node="src.col1",
+                target_node="tbl_a.col1",
+                file_path="/q.sql",
+                query_index=0,
+            ),
+            GraphEdge(
+                source_node="src.col2",
+                target_node="tbl_b.col1",
+                file_path="/q.sql",
+                query_index=0,
+            ),
+        ]
+        graph = LineageGraph(nodes=nodes, edges=edges)
+        querier = GraphQuerier(graph)
+
+        result = querier.find_upstream_table_multi(["tbl_a", "tbl_b"])
+
+        assert result.is_table_query is True
+        assert result.direction == "upstream"
+        identifiers = {n.identifier for n in result.related_columns}
+        assert identifiers == {"src.col1", "src.col2"}
+
+    def test_multi_table_upstream_excludes_all_table_columns(self):
+        """Test that columns from ALL queried tables are excluded."""
+        # tbl_a.col1 -> tbl_b.col1 -> tbl_c.col1
+        nodes = [
+            GraphNode.from_identifier("tbl_a.col1", "/q.sql", 0),
+            GraphNode.from_identifier("tbl_b.col1", "/q.sql", 0),
+            GraphNode.from_identifier("tbl_c.col1", "/q.sql", 0),
+        ]
+        edges = [
+            GraphEdge(
+                source_node="tbl_a.col1",
+                target_node="tbl_b.col1",
+                file_path="/q.sql",
+                query_index=0,
+            ),
+            GraphEdge(
+                source_node="tbl_b.col1",
+                target_node="tbl_c.col1",
+                file_path="/q.sql",
+                query_index=0,
+            ),
+        ]
+        graph = LineageGraph(nodes=nodes, edges=edges)
+        querier = GraphQuerier(graph)
+
+        # Query upstream for both tbl_b and tbl_c
+        result = querier.find_upstream_table_multi(["tbl_b", "tbl_c"])
+
+        # tbl_b.col1 is upstream of tbl_c but since tbl_b is a queried table,
+        # its columns should be excluded
+        identifiers = {n.identifier for n in result.related_columns}
+        assert identifiers == {"tbl_a.col1"}
+
+    def test_multi_table_upstream_combines_queried_columns(self):
+        """Test that queried_columns includes columns from all tables."""
+        nodes = [
+            GraphNode.from_identifier("src.col", "/q.sql", 0),
+            GraphNode.from_identifier("tbl_a.col1", "/q.sql", 0),
+            GraphNode.from_identifier("tbl_a.col2", "/q.sql", 0),
+            GraphNode.from_identifier("tbl_b.col1", "/q.sql", 0),
+        ]
+        edges = [
+            GraphEdge(
+                source_node="src.col",
+                target_node="tbl_a.col1",
+                file_path="/q.sql",
+                query_index=0,
+            ),
+            GraphEdge(
+                source_node="src.col",
+                target_node="tbl_a.col2",
+                file_path="/q.sql",
+                query_index=0,
+            ),
+            GraphEdge(
+                source_node="src.col",
+                target_node="tbl_b.col1",
+                file_path="/q.sql",
+                query_index=0,
+            ),
+        ]
+        graph = LineageGraph(nodes=nodes, edges=edges)
+        querier = GraphQuerier(graph)
+
+        result = querier.find_upstream_table_multi(["tbl_a", "tbl_b"])
+
+        # All columns from both tables should be in queried_columns
+        assert set(result.queried_columns) == {
+            "tbl_a.col1",
+            "tbl_a.col2",
+            "tbl_b.col1",
+        }
+
+
+class TestMultiTableDownstream:
+    """Tests for find_downstream_table_multi method."""
+
+    def test_basic_multi_table_downstream(self):
+        """Test downstream query for multiple tables."""
+        # tbl_a.col1 -> target1.col, tbl_b.col1 -> target2.col
+        nodes = [
+            GraphNode.from_identifier("tbl_a.col1", "/q.sql", 0),
+            GraphNode.from_identifier("tbl_b.col1", "/q.sql", 0),
+            GraphNode.from_identifier("target1.col", "/q.sql", 0),
+            GraphNode.from_identifier("target2.col", "/q.sql", 0),
+        ]
+        edges = [
+            GraphEdge(
+                source_node="tbl_a.col1",
+                target_node="target1.col",
+                file_path="/q.sql",
+                query_index=0,
+            ),
+            GraphEdge(
+                source_node="tbl_b.col1",
+                target_node="target2.col",
+                file_path="/q.sql",
+                query_index=0,
+            ),
+        ]
+        graph = LineageGraph(nodes=nodes, edges=edges)
+        querier = GraphQuerier(graph)
+
+        result = querier.find_downstream_table_multi(["tbl_a", "tbl_b"])
+
+        assert result.is_table_query is True
+        assert result.direction == "downstream"
+        identifiers = {n.identifier for n in result.related_columns}
+        assert identifiers == {"target1.col", "target2.col"}
+
+    def test_multi_table_downstream_excludes_all_table_columns(self):
+        """Test that columns from ALL queried tables are excluded."""
+        # tbl_a.col1 -> tbl_b.col1 -> tbl_c.col1
+        nodes = [
+            GraphNode.from_identifier("tbl_a.col1", "/q.sql", 0),
+            GraphNode.from_identifier("tbl_b.col1", "/q.sql", 0),
+            GraphNode.from_identifier("tbl_c.col1", "/q.sql", 0),
+        ]
+        edges = [
+            GraphEdge(
+                source_node="tbl_a.col1",
+                target_node="tbl_b.col1",
+                file_path="/q.sql",
+                query_index=0,
+            ),
+            GraphEdge(
+                source_node="tbl_b.col1",
+                target_node="tbl_c.col1",
+                file_path="/q.sql",
+                query_index=0,
+            ),
+        ]
+        graph = LineageGraph(nodes=nodes, edges=edges)
+        querier = GraphQuerier(graph)
+
+        # Query downstream for both tbl_a and tbl_b
+        result = querier.find_downstream_table_multi(["tbl_a", "tbl_b"])
+
+        # tbl_b.col1 is downstream of tbl_a but since tbl_b is queried,
+        # its columns should be excluded
+        identifiers = {n.identifier for n in result.related_columns}
+        assert identifiers == {"tbl_c.col1"}

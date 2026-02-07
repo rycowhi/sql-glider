@@ -449,6 +449,10 @@ sqlglider graph merge --glob "*.json" -o merged.json
 sqlglider graph query graph.json --upstream orders.customer_id
 sqlglider graph query graph.json --downstream customers.id -f json
 
+# Query multiple columns or tables (comma-separated)
+sqlglider graph query graph.json --downstream col_a,col_b
+sqlglider graph query graph.json --upstream tbl_one,tbl_two --level table
+
 # Query with diagram output (Mermaid or DOT)
 sqlglider graph query graph.json --upstream orders.customer_id -f mermaid
 sqlglider graph query graph.json --downstream customers.id -f dot
